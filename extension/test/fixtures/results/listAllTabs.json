@@ -1,0 +1,16 @@
+{
+  "tabs": [
+    {
+      "tabId": 1,
+      "windowId": 1,
+      "url": "https://example.com/",
+      "title": "Example Domain",
+      "active": true,
+      "pinned": false,
+      "private": false,
+      "pool": true,
+      "attached": false
+    }
+  ],
+  "count": 1
+}

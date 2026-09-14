@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>firefox-ctl preferences</title>
+    <style>
+      body {
+        font: message-box;
+        margin: 1rem;
+        max-width: 42rem;
+      }
+      .setting {
+        margin-bottom: 1.5rem;
+      }
+      .setting p {
+        margin: 0.25rem 0 0 1.6rem;
+      }
+      .warning {
+        color: #8f0000;
+      }
+      #status {
+        min-height: 1.2em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>firefox-ctl</h1>
+
+    <div class="setting">
+      <label>
+        <input type="checkbox" id="evaluate-enabled" />
+        Allow the <code>evaluate</code> command
+      </label>
+      <p class="warning">
+        While this is on, the terminal can run arbitrary JavaScript in every page this add-on
+        reaches. Leave it off unless you are debugging a page yourself.
+      </p>
+      <p>
+        With it off, <code>firefox-ctl evaluate</code> fails with
+        <code>EVALUATE_DISABLED</code> and no page is touched.
+      </p>
+    </div>
+
+    <div class="setting">
+      <label>
+        <input type="checkbox" id="redact-headers" />
+        Hide credentials in response headers
+      </label>
+      <p>
+        <code>getNetworkRequests --includeHeaders</code> replaces the values of
+        <code>Set-Cookie</code>, <code>Cookie</code>, <code>Authorization</code> and their kin with
+        <code>[redacted]</code>. Untick this to get them raw.
+      </p>
+    </div>
+
+    <p id="status"></p>
+
+    <script src="dist/options.js"></script>
+  </body>
+</html>

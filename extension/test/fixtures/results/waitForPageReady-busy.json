@@ -1,0 +1,17 @@
+{
+  "totalWaitMs": 50,
+  "timeline": [
+    {
+      "t": 0,
+      "event": "start",
+      "maxWait": 10000,
+      "idleThreshold": 150,
+      "requireVisualIdle": true
+    },
+    { "t": 50, "event": "critical_idle", "pending": 0, "visualPending": 0 },
+    { "t": 50, "event": "visual_idle" },
+    { "t": 50, "event": "render_settled", "readyState": "complete", "rafWaitMs": 0 },
+    { "t": 50, "event": "complete", "totalWait": 50 }
+  ],
+  "timedOut": false
+}

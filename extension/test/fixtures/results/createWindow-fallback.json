@@ -1,0 +1,12 @@
+{
+  "windowId": 1,
+  "tabId": 1,
+  "tabCount": 1,
+  "maxTabs": 12,
+  "isNewWindow": true,
+  "isPrivate": false,
+  "privateFallback": true,
+  "closedOldestTab": null,
+  "message": "Tab 1/12",
+  "modeWarning": "Private window unavailable (permission not granted in Firefox settings). Fell back to non-private mode. Browsing data will persist."
+}

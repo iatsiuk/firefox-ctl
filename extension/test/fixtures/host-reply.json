@@ -1,0 +1,5 @@
+{
+  "id": "b17e",
+  "success": true,
+  "result": { "host": "0.1.0", "go": "go1.25.1", "platform": "darwin" }
+}

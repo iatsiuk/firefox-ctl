@@ -1,0 +1,51 @@
+{
+  "manifest_version": 2,
+  "name": "firefox-ctl",
+  "version": "1.0.0",
+  "description": "Control Firefox from the terminal: tabs, DOM, screenshots and DevTools over native messaging.",
+  "homepage_url": "https://github.com/iatsiuk/firefox-ctl",
+  "author": "Aleksei Iatsiuk",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "firefox-ctl@firefox-ctl.dev",
+      "strict_min_version": "155.0",
+      "data_collection_permissions": {
+        "required": [
+          "browsingActivity",
+          "websiteContent",
+          "websiteActivity",
+          "authenticationInfo"
+        ]
+      }
+    }
+  },
+  "icons": {
+    "48": "icons/firefox-ctl.svg",
+    "96": "icons/firefox-ctl.svg"
+  },
+  "permissions": [
+    "nativeMessaging",
+    "tabs",
+    "tabGroups",
+    "<all_urls>",
+    "webRequest",
+    "storage"
+  ],
+  "background": {
+    "scripts": ["dist/background.js"],
+    "persistent": true
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
+  "content_security_policy": "script-src 'self'; object-src 'self'"
+}

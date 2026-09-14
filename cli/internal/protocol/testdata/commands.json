@@ -1,0 +1,208 @@
+[
+  { "name": "ping", "flags": [] },
+  { "name": "version", "flags": [] },
+  {
+    "name": "createWindow",
+    "flags": [
+      { "name": "url", "kind": "string" },
+      { "name": "private", "kind": "bool" }
+    ]
+  },
+  {
+    "name": "navigate",
+    "flags": [
+      { "name": "url", "kind": "string" },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  { "name": "canNavigate", "flags": [] },
+  { "name": "getWindowMode", "flags": [] },
+  { "name": "getActiveTab", "flags": [] },
+  { "name": "getTabs", "flags": [] },
+  { "name": "listAllTabs", "flags": [] },
+  {
+    "name": "attachTab",
+    "flags": [{ "name": "tabId", "kind": "int" }]
+  },
+  {
+    "name": "detachTab",
+    "flags": [{ "name": "tabId", "kind": "int" }]
+  },
+  {
+    "name": "closeTab",
+    "flags": [{ "name": "tabId", "kind": "int" }]
+  },
+  { "name": "closeWindow", "flags": [] },
+  { "name": "getWindows", "flags": [] },
+  {
+    "name": "resizeWindow",
+    "flags": [
+      { "name": "windowId", "kind": "int" },
+      { "name": "width", "kind": "int" },
+      { "name": "height", "kind": "int" },
+      { "name": "left", "kind": "int" },
+      { "name": "top", "kind": "int" }
+    ]
+  },
+  {
+    "name": "setViewport",
+    "flags": [
+      { "name": "windowId", "kind": "int" },
+      { "name": "device", "kind": "string" },
+      { "name": "width", "kind": "int" },
+      { "name": "height", "kind": "int" }
+    ]
+  },
+  {
+    "name": "getContent",
+    "flags": [
+      { "name": "selector", "kind": "string" },
+      { "name": "includeHtml", "kind": "bool" },
+      { "name": "maxLength", "kind": "int", "default": 50000 },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "click",
+    "flags": [
+      { "name": "selector", "kind": "string" },
+      { "name": "autoWait", "kind": "bool", "default": true },
+      { "name": "waitTimeout", "kind": "int" },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "type",
+    "flags": [
+      { "name": "selector", "kind": "string" },
+      { "name": "text", "kind": "string" },
+      { "name": "clear", "kind": "bool", "default": true },
+      { "name": "autoWait", "kind": "bool" },
+      { "name": "waitTimeout", "kind": "int" },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "pressKey",
+    "flags": [
+      { "name": "key", "kind": "string" },
+      { "name": "selector", "kind": "string" },
+      { "name": "ctrlKey", "kind": "bool" },
+      { "name": "shiftKey", "kind": "bool" },
+      { "name": "altKey", "kind": "bool" },
+      { "name": "metaKey", "kind": "bool" },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "scroll",
+    "flags": [
+      { "name": "selector", "kind": "string" },
+      { "name": "x", "kind": "int" },
+      { "name": "y", "kind": "int" },
+      { "name": "behavior", "kind": "string", "default": "smooth" },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "waitFor",
+    "flags": [
+      { "name": "selector", "kind": "string" },
+      { "name": "text", "kind": "string" },
+      { "name": "url", "kind": "string" },
+      { "name": "timeout", "kind": "int", "default": 10000 },
+      { "name": "interval", "kind": "int", "default": 100 },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "screenshot",
+    "flags": [
+      { "name": "format", "kind": "string" },
+      { "name": "quality", "kind": "int", "default": 60 },
+      { "name": "scale", "kind": "float", "default": 0.5 },
+      { "name": "purpose", "kind": "string" },
+      { "name": "annotate", "kind": "bool" },
+      { "name": "maxWait", "kind": "int", "default": 10000 },
+      { "name": "waitForImages", "kind": "bool", "default": true },
+      { "name": "skipReadiness", "kind": "bool" },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "handleConsent",
+    "flags": [
+      { "name": "scanTimeout", "kind": "int", "default": 3000 },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "getPageState",
+    "flags": [
+      { "name": "maxHeadings", "kind": "int", "default": 30 },
+      { "name": "maxLinks", "kind": "int", "default": 50 },
+      { "name": "maxButtons", "kind": "int", "default": 30 },
+      { "name": "maxInputs", "kind": "int", "default": 30 },
+      { "name": "maxImages", "kind": "int", "default": 20 },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "getAccessibilitySnapshot",
+    "flags": [
+      { "name": "selector", "kind": "string", "default": "body" },
+      { "name": "maxDepth", "kind": "int", "default": 5 },
+      { "name": "maxNodes", "kind": "int", "default": 200 },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "getElementInfo",
+    "flags": [
+      { "name": "selector", "kind": "string" },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "evaluate",
+    "flags": [
+      { "name": "expression", "kind": "string" },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "getConsoleLogs",
+    "flags": [
+      { "name": "level", "kind": "string" },
+      { "name": "clear", "kind": "bool" },
+      { "name": "limit", "kind": "int", "default": 100 },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "getNetworkRequests",
+    "flags": [
+      { "name": "type", "kind": "string" },
+      { "name": "status", "kind": "string" },
+      { "name": "clear", "kind": "bool" },
+      { "name": "limit", "kind": "int", "default": 50 },
+      { "name": "includeHeaders", "kind": "bool" },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  }
+]

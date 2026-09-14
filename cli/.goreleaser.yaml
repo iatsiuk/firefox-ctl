@@ -1,0 +1,79 @@
+version: 2
+
+project_name: firefox-ctl
+
+before:
+  hooks:
+    - go mod tidy
+    # goreleaser refuses to glob above its working directory, so the root
+    # license is copied in before the archives are built
+    - cp ../LICENSE ./LICENSE
+    # same limitation for the unsigned extension package that `make ext-xpi`
+    # built before goreleaser ran
+    - sh -c 'cp ../extension/web-ext-artifacts/firefox-ctl-[0-9]*.zip ./firefox-ctl-extension.zip'
+
+builds:
+  - main: ./cmd/firefox-ctl
+    binary: firefox-ctl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: darwin
+        goarch: amd64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+
+# the repository has no remote yet, so name it instead of reading it from git
+release:
+  github:
+    owner: iatsiuk
+    name: firefox-ctl
+  # the unsigned extension package, built by `make ext-xpi` before goreleaser runs
+  extra_files:
+    - glob: firefox-ctl-extension.zip
+      name_template: "firefox-ctl-extension-{{ .Version }}.zip"
+
+checksum:
+  name_template: checksums.txt
+
+homebrew_casks:
+  - name: firefox-ctl
+    repository:
+      owner: iatsiuk
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/iatsiuk/firefox-ctl"
+    description: "Control Firefox from the terminal: tabs, DOM, screenshots and DevTools over native messaging"
+    hooks:
+      post:
+        install: |
+          system_command "/bin/sh", args: ["-c", "xattr -d com.apple.quarantine '#{staged_path}/firefox-ctl' 2>/dev/null; true"]
+    caveats: |
+      Quarantine attribute (com.apple.quarantine) is automatically removed
+      from the firefox-ctl binary during installation to prevent Gatekeeper warnings.
+      See: https://github.com/Homebrew/brew/issues/20755
+
+      Register the native messaging host with Firefox once:
+        firefox-ctl install
+
+      To uninstall:
+        firefox-ctl install --uninstall
+        brew uninstall --cask iatsiuk/tap/firefox-ctl
+
+changelog:
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"

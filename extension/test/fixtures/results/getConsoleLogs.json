@@ -1,0 +1,10 @@
+{
+  "logs": [
+    { "level": "log", "timestamp": 0, "message": "hello {\n  \"a\": 1\n}" },
+    { "level": "error", "timestamp": 25, "message": "boom" }
+  ],
+  "total": 2,
+  "filtered": 2,
+  "captureEnabled": true,
+  "scope": "content-world"
+}

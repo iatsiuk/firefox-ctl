@@ -1,0 +1,11 @@
+{
+  "windowId": 1,
+  "tabId": 1,
+  "tabCount": 1,
+  "maxTabs": 12,
+  "isNewWindow": true,
+  "isPrivate": true,
+  "privateFallback": false,
+  "closedOldestTab": null,
+  "message": "Tab 1/12"
+}

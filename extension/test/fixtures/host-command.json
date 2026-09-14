@@ -1,0 +1,6 @@
+{
+  "id": "3f2a",
+  "type": "command",
+  "command": "navigate",
+  "params": { "url": "https://example.com", "tabId": 7 }
+}

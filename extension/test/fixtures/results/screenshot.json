@@ -1,0 +1,25 @@
+{
+  "tabId": 1,
+  "format": "jpeg",
+  "quality": 60,
+  "scale": 0.5,
+  "dataUrl": "data:image/jpeg;base64,c2NhbGVk",
+  "readiness": {
+    "waitMs": 0,
+    "timedOut": false,
+    "timeline": [
+      {
+        "t": 0,
+        "event": "start",
+        "maxWait": 10000,
+        "idleThreshold": 150,
+        "requireVisualIdle": true
+      },
+      { "t": 0, "event": "already_idle" },
+      { "t": 0, "event": "render_settled", "readyState": "complete", "rafWaitMs": 0 },
+      { "t": 0, "event": "complete", "totalWait": 0 }
+    ]
+  },
+  "originalSize": { "width": 1280, "height": 800 },
+  "scaledSize": { "width": 640, "height": 400 }
+}

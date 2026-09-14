@@ -1,0 +1,14 @@
+[
+  {
+    "windowId": 1,
+    "private": false,
+    "focused": true,
+    "tabCount": 2
+  },
+  {
+    "windowId": 2,
+    "private": true,
+    "focused": false,
+    "tabCount": 1
+  }
+]

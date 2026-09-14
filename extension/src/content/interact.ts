@@ -1,0 +1,212 @@
+// The interaction page actions: clicking, typing and key presses, with their
+// result shapes and key code maps.
+
+import type { JsonObject, JsonValue } from "../protocol"
+import type { Page } from "./page"
+import {
+  autoWaitTimeout,
+  safeQuerySelector,
+  smartQuerySelector,
+  validateSelector,
+} from "./selector"
+import { buildElementNotFoundError } from "./suggest"
+import { nextFrame } from "./timing"
+
+const CLICK_TEXT_LIMIT = 100
+
+/** The `code` map; anything else keeps the key name or becomes `Key<X>`. */
+const keyCodes: Record<string, string> = {
+  Enter: "Enter",
+  Tab: "Tab",
+  Escape: "Escape",
+  Backspace: "Backspace",
+  Delete: "Delete",
+  ArrowUp: "ArrowUp",
+  ArrowDown: "ArrowDown",
+  ArrowLeft: "ArrowLeft",
+  ArrowRight: "ArrowRight",
+  Home: "Home",
+  End: "End",
+  PageUp: "PageUp",
+  PageDown: "PageDown",
+  " ": "Space",
+}
+
+/** The legacy keyCode map; a single character falls back to its code point. */
+const keyNumbers: Record<string, number> = {
+  Enter: 13,
+  Tab: 9,
+  Escape: 27,
+  Backspace: 8,
+  Delete: 46,
+  ArrowUp: 38,
+  ArrowDown: 40,
+  ArrowLeft: 37,
+  ArrowRight: 39,
+  Home: 36,
+  End: 35,
+  PageUp: 33,
+  PageDown: 34,
+  " ": 32,
+}
+
+type Editable = HTMLElement & { value?: string }
+
+function numberParam(value: JsonValue | undefined, fallback: number): number {
+  return typeof value === "number" ? value : fallback
+}
+
+function boolParam(value: JsonValue | undefined, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback
+}
+
+/** Looks the selector up, auto-waiting, and reports the diagnostics on a miss. */
+async function requireElement(
+  params: JsonObject,
+  page: Page,
+  operation: string,
+): Promise<{ selector: string; element: HTMLElement }> {
+  const selector = validateSelector(page, params.selector)
+  const element = await smartQuerySelector(page, selector, {
+    autoWait: boolParam(params.autoWait, true),
+    timeout: numberParam(params.waitTimeout, autoWaitTimeout),
+  })
+  if (!element) {
+    throw buildElementNotFoundError(page, selector, operation)
+  }
+  return { selector, element: element as HTMLElement }
+}
+
+export async function click(params: JsonObject, page: Page): Promise<JsonValue> {
+  const { selector, element } = await requireElement(params, page, "click")
+
+  element.scrollIntoView({ behavior: "smooth", block: "center" })
+  // let the smooth scroll settle before the click lands
+  await nextFrame(page)
+  element.click()
+
+  return {
+    selector,
+    clicked: true,
+    tagName: element.tagName.toLowerCase(),
+    text: element.textContent?.trim().slice(0, CLICK_TEXT_LIMIT) || "",
+    id: element.id || null,
+    className: element.className || null,
+  }
+}
+
+function setInputValue(page: Page, element: Editable, value: string): void {
+  const setter = page.inputValueSetter(element)
+  if (setter === undefined) {
+    element.value = value
+    return
+  }
+  setter(value)
+}
+
+export async function type(params: JsonObject, page: Page): Promise<JsonValue> {
+  if (params.text === undefined) {
+    throw new Error("text is required")
+  }
+  const text = String(params.text)
+  const clear = boolParam(params.clear, true)
+  const { selector, element } = await requireElement(params, page, "type")
+
+  const tag = element.tagName
+  const isInput = tag === "INPUT" || tag === "TEXTAREA"
+  if (!isInput && !element.isContentEditable) {
+    throw new Error(`Element is not editable: ${selector}`)
+  }
+
+  element.focus()
+
+  if (isInput) {
+    const input = element as Editable
+    setInputValue(page, input, clear ? text : (input.value ?? "") + text)
+    // an InputEvent carries the intent frameworks look for
+    element.dispatchEvent(
+      new page.InputEvent("input", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertText",
+        data: text,
+      }),
+    )
+    element.dispatchEvent(new page.Event("change", { bubbles: true }))
+  } else {
+    if (clear) {
+      element.textContent = ""
+    }
+    element.textContent += text
+    element.dispatchEvent(new page.Event("input", { bubbles: true }))
+  }
+
+  return {
+    selector,
+    typed: text,
+    currentValue: isInput ? ((element as Editable).value ?? "") : element.textContent,
+  }
+}
+
+function codeOf(key: string): string {
+  return keyCodes[key] ?? (key.length === 1 ? `Key${key.toUpperCase()}` : key)
+}
+
+function numberOf(key: string): number {
+  const mapped = keyNumbers[key]
+  if (mapped !== undefined) {
+    return mapped
+  }
+  return key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0
+}
+
+function keyTarget(params: JsonObject, page: Page): HTMLElement {
+  if (!params.selector) {
+    return (page.document.activeElement ?? page.document.body) as HTMLElement
+  }
+  const element = safeQuerySelector(page, params.selector)
+  if (!element) {
+    throw new Error(`Element not found: ${String(params.selector)}`)
+  }
+  const target = element as HTMLElement
+  target.focus()
+  return target
+}
+
+export function pressKey(params: JsonObject, page: Page): JsonValue {
+  const key = params.key
+  if (!key || typeof key !== "string") {
+    throw new Error("key is required")
+  }
+  const modifiers = {
+    ctrlKey: boolParam(params.ctrlKey, false),
+    shiftKey: boolParam(params.shiftKey, false),
+    altKey: boolParam(params.altKey, false),
+    metaKey: boolParam(params.metaKey, false),
+  }
+  const target = keyTarget(params, page)
+
+  const init: KeyboardEventInit = {
+    key,
+    code: codeOf(key),
+    keyCode: numberOf(key),
+    which: numberOf(key),
+    ...modifiers,
+    bubbles: true,
+    cancelable: true,
+  }
+
+  target.dispatchEvent(new page.KeyboardEvent("keydown", init))
+  // keypress is deprecated but some sites still listen for it
+  if (key.length === 1) {
+    target.dispatchEvent(new page.KeyboardEvent("keypress", init))
+  }
+  target.dispatchEvent(new page.KeyboardEvent("keyup", init))
+
+  return {
+    key,
+    selector: params.selector ? String(params.selector) : "(active element)",
+    targetTag: target.tagName.toLowerCase(),
+    modifiers,
+  }
+}

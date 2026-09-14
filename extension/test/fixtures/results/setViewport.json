@@ -1,0 +1,24 @@
+{
+  "device": "iphone-14",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "window": {
+    "width": 390,
+    "height": 924
+  },
+  "type": "mobile",
+  "availableDevices": [
+    "iphone-se",
+    "iphone-14",
+    "iphone-14-pro-max",
+    "pixel-7",
+    "galaxy-s23",
+    "ipad-mini",
+    "ipad-pro-11",
+    "ipad-pro-12",
+    "laptop",
+    "desktop"
+  ]
+}

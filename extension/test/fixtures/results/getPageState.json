@@ -1,0 +1,41 @@
+{
+  "url": "https://example.com/fixture",
+  "title": "Fixture page",
+  "viewport": { "width": 1200, "height": 800, "scrollX": 0, "scrollY": 0, "scrollHeight": 2000 },
+  "errors": [],
+  "headings": [{ "level": "h1", "text": "Fixture page" }],
+  "links": [{ "text": "Docs", "href": "/docs" }],
+  "buttons": [{ "text": "Send", "disabled": true, "type": "submit" }],
+  "inputs": [
+    {
+      "type": "text",
+      "name": "user",
+      "label": "User",
+      "value": "ada",
+      "required": true,
+      "disabled": false
+    },
+    {
+      "type": "password",
+      "name": "pass",
+      "label": "",
+      "value": "***",
+      "required": false,
+      "disabled": false
+    }
+  ],
+  "images": [{ "alt": "Logo", "src": "/logo.png" }],
+  "landmarks": [
+    { "role": "header", "label": "" },
+    { "role": "nav", "label": "Main" },
+    { "role": "main", "label": "" }
+  ],
+  "counts": {
+    "headings": { "shown": 1, "total": 1 },
+    "links": { "shown": 1, "total": 1 },
+    "buttons": { "shown": 1, "total": 1 },
+    "inputs": { "shown": 2, "total": 2 },
+    "images": { "shown": 1, "total": 1 },
+    "landmarks": { "shown": 3, "total": 3 }
+  }
+}

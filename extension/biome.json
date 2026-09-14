@@ -1,0 +1,56 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+  "files": {
+    "includes": ["src/**", "test/**", "build.ts"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "suspicious": {
+        "noExplicitAny": "error"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "asNeeded"
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["src/content/**", "!src/content/page.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedGlobals": {
+              "level": "error",
+              "options": {
+                "deniedGlobals": {
+                  "document": "use page.document",
+                  "window": "use page.window",
+                  "CSS": "use page.cssEscape",
+                  "InputEvent": "use page.InputEvent",
+                  "KeyboardEvent": "use page.KeyboardEvent",
+                  "Event": "use page.Event",
+                  "requestAnimationFrame": "use page.raf",
+                  "setTimeout": "use page.setTimeout",
+                  "clearTimeout": "use page.clearTimeout",
+                  "Date": "use page.now",
+                  "console": "use page.console"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "selector": "#intro",
+  "tagName": "p",
+  "attributes": { "id": "intro" },
+  "text": "Hello world",
+  "visible": true,
+  "position": { "x": 0, "y": 100, "width": 200, "height": 20 },
+  "styles": {
+    "display": "block",
+    "visibility": "visible",
+    "opacity": "1",
+    "color": "rgb(0, 0, 0)",
+    "backgroundColor": "rgba(0, 0, 0, 0)",
+    "fontSize": "16px"
+  }
+}

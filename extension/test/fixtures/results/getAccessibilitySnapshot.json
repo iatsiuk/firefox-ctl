@@ -1,0 +1,33 @@
+{
+  "url": "https://example.com/fixture",
+  "title": "Fixture page",
+  "tree": {
+    "children": [
+      { "role": "banner", "children": [{ "role": "heading", "text": "Fixture page" }] },
+      {
+        "role": "navigation",
+        "name": "Main",
+        "children": [{ "role": "link", "text": "Docs" }]
+      },
+      {
+        "role": "main",
+        "children": [
+          { "text": "Hello world" },
+          {
+            "role": "form",
+            "children": [
+              { "text": "User" },
+              { "role": "textbox", "name": "User", "value": "ada" },
+              { "role": "textbox" },
+              { "role": "button", "text": "Send", "disabled": true }
+            ]
+          },
+          { "role": "img", "name": "Logo" }
+        ]
+      }
+    ]
+  },
+  "nodeCount": 13,
+  "maxNodes": 200,
+  "truncated": false
+}

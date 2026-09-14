@@ -1,0 +1,13 @@
+.DS_Store
+cli/firefox-ctl
+cli/coverage.out
+cli/dist/
+cli/LICENSE
+cli/firefox-ctl-extension.zip
+extension/dist/
+extension/node_modules/
+.env
+extension/web-ext-artifacts/
+extension/.amo-upload-uuid
+docs/plans/
+.ralphex/

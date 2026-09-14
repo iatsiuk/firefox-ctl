@@ -1,0 +1,26 @@
+{
+  "name": "firefox-ctl-extension",
+  "version": "1.0.0",
+  "private": true,
+  "author": "Aleksei Iatsiuk <a.v.iatsiuk@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/iatsiuk/firefox-ctl",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iatsiuk/firefox-ctl.git"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "bun run build.ts",
+    "test": "bun test",
+    "lint": "biome check",
+    "check": "tsc --noEmit && biome check"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.13",
+    "@happy-dom/global-registrator": "20.14.5",
+    "@types/firefox-webext-browser": "143.0.0",
+    "bun-types": "1.4.2",
+    "typescript": "5.9.3"
+  }
+}
