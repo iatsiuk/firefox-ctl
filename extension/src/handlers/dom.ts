@@ -34,7 +34,7 @@ export type PageCommand = (typeof PAGE_COMMANDS)[number]
 const BACKGROUND_HINT = "Scroll has no effect on background tabs. Switch tab to active first."
 
 const EVALUATE_DISABLED_HINT =
-  "evaluate is disabled; enable it in the add-on preferences (about:addons > firefox-ctl > Preferences)"
+  "evaluate is disabled; enable it in the add-on preferences (about:addons > Terminal Control for Firefox > Preferences)"
 
 // targeting is the background page's business; the content script runs in the
 // tab that was picked and has no use for these

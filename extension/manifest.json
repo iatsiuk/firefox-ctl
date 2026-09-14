@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "name": "firefox-ctl",
+  "name": "Terminal Control for Firefox",
   "version": "1.0.0",
   "description": "Control Firefox from the terminal: tabs, DOM, screenshots and DevTools over native messaging.",
   "homepage_url": "https://github.com/iatsiuk/firefox-ctl",

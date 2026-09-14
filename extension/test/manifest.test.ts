@@ -17,7 +17,7 @@ describe("manifest.json", () => {
   test("is valid MV2 JSON with the project name", async () => {
     const manifest = await readManifest()
     expect(manifest.manifest_version).toBe(2)
-    expect(manifest.name).toBe("firefox-ctl")
+    expect(manifest.name).toBe("Terminal Control for Firefox")
   })
 
   test("carries the same version as package.json", async () => {

@@ -437,7 +437,7 @@ describe("page commands", () => {
 
     expect(await failure(port, "evaluate", { expression: "1 + 1" })).toBe(
       "EVALUATE_DISABLED: evaluate is disabled; enable it in the add-on preferences " +
-        "(about:addons > firefox-ctl > Preferences)",
+        "(about:addons > Terminal Control for Firefox > Preferences)",
     )
 
     await writeEvaluateEnabled(browser, true)

@@ -80,7 +80,7 @@ describe("packaged extension", () => {
   test("reports a referenced file that the build does not produce", async () => {
     const missing = referencedFiles({
       manifest_version: 2,
-      name: "firefox-ctl",
+      name: "Terminal Control for Firefox",
       version: "0.1.0",
       background: { scripts: ["dist/nope.js"] },
     })

@@ -164,7 +164,7 @@ the DOM but not the page's own globals, and an expression that throws comes back
 result with `type: "error"`.
 
 `evaluate` is off until you tick "Allow the `evaluate` command" in the add-on preferences
-(about:addons > firefox-ctl > Preferences, or the Preferences tab of the temporary add-on). Until
+(about:addons > Terminal Control for Firefox > Preferences, or the Preferences tab of the temporary add-on). Until
 then the command fails with `EVALUATE_DISABLED` and the tab is never messaged. The page is
 `options.html` over `src/options.ts`; the same page holds the header redaction switch. Both
 settings live in `storage.local` and are read on every command, so a toggle needs no restart.

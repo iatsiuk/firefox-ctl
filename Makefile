@@ -29,7 +29,7 @@ ext-check:
 
 # unsigned xpi for Developer Edition, Nightly or ESR; signed one for release Firefox
 ext-xpi: ext-build
-	cd extension && bunx web-ext build --overwrite-dest --ignore-files 'src' 'src/**' 'test' 'test/**' 'node_modules' 'node_modules/**' 'web-ext-artifacts' 'dist/*.map' 'build.ts' 'bunfig.toml' 'biome.json' 'tsconfig.json' 'package.json' 'bun.lock' 'README.md' 'BUILD.md'
+	cd extension && bunx web-ext build --overwrite-dest --filename 'firefox-ctl-{version}.zip' --ignore-files 'src' 'src/**' 'test' 'test/**' 'node_modules' 'node_modules/**' 'web-ext-artifacts' 'dist/*.map' 'build.ts' 'bunfig.toml' 'biome.json' 'tsconfig.json' 'package.json' 'bun.lock' 'README.md' 'BUILD.md'
 
 ext-sign: ext-build
 	cd extension && set -a && . ../.env && set +a && bunx web-ext sign --channel unlisted --api-key "$$JWT_ISSUER" --api-secret "$$JWT_SECRET" --ignore-files 'src' 'src/**' 'test' 'test/**' 'node_modules' 'node_modules/**' 'web-ext-artifacts' 'dist/*.map' 'build.ts' 'bunfig.toml' 'biome.json' 'tsconfig.json' 'package.json' 'bun.lock' 'README.md' 'BUILD.md'

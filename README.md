@@ -78,7 +78,7 @@ Large replies are kept below the host's 10 MiB extension-to-host frame cap. fire
 ## Limitations
 
 - This is a single-user tool. There is no auth token, command allowlist, or URL allowlist. The Unix-socket directory is mode 0700 and the socket is mode 0600.
-- `evaluate` is off by default. It runs only after you tick "Allow the `evaluate` command" in the add-on preferences (about:addons > firefox-ctl > Preferences); until then it fails with `EVALUATE_DISABLED` and no page is touched. Nothing on the command line can turn it on.
+- `evaluate` is off by default. It runs only after you tick "Allow the `evaluate` command" in the add-on preferences (about:addons > Terminal Control for Firefox > Preferences); until then it fails with `EVALUATE_DISABLED` and no page is touched. Nothing on the command line can turn it on.
 - The add-on is temporary. Firefox removes it when Firefox closes; load it again after a restart. Reload it after `bun run build`.
 - `createWindow` requests a private window by default. If the add-on lacks Firefox's private-window permission, it falls back to a normal window and returns `privateFallback: true` and `modeWarning`.
 - Content scripts cannot run on restricted browser or extension pages such as `about:` and `moz-extension:`. Those return `RESTRICTED_PAGE`. JSON, PDF, download, and other non-HTML pages return `CONTENT_SCRIPT_ERROR` when detected.

@@ -17,11 +17,11 @@ Every command answers over the same path: content script or background API, then
 | Command family | What leaves the browser | Category |
 |---|---|---|
 | `version`, `ping` | extension version and feature list, a timestamp | none |
-| tabs, windows, groups, `navigate`, `getActiveTab`, `listTabs` | urls, page titles, tab, window and group ids | `browsingActivity` |
-| `getContent`, `getAccessibilitySnapshot`, `findElements`, `waitFor` | text, HTML, link and form structure of the page, including values of visible fields | `websiteContent` |
+| tabs, windows, groups, `navigate`, `getActiveTab`, `getTabs`, `listAllTabs` | urls, page titles, tab, window and group ids | `browsingActivity` |
+| `getContent`, `getAccessibilitySnapshot`, `getElementInfo`, `getPageState`, `waitFor` | text, HTML, link and form structure of the page, including values of visible fields | `websiteContent` |
 | `screenshot` | a rendered image of the page, which can hold anything the page shows | `websiteContent` |
 | `getConsoleLogs`, `getNetworkRequests` | console output, request and response metadata, request urls with credential-looking query values already stripped, response headers redacted by default | `websiteContent` |
-| `click`, `type`, `pressKey`, `scroll`, `hover`, `selectOption`, `handleDialog` | what was clicked, typed, pressed or scrolled and the resulting element state | `websiteActivity` |
+| `click`, `type`, `pressKey`, `scroll`, `handleConsent` | what was clicked, typed, pressed or scrolled and the resulting element state | `websiteActivity` |
 | `type` into a password field, `getContent` or `evaluate` over one | the value of a credential field | `authenticationInfo` |
 | `evaluate` (opt-in, off by default) | whatever the expression returns, so any of the above | the categories above |
 
@@ -57,7 +57,7 @@ Every command answers over the same path: content script or background API, then
 - Restricted pages (`about:*` except `about:blank`, `moz-extension:`, JSON/PDF viewers, downloads) cannot host a content script; return structured errors (`RESTRICTED_PAGE`, `PAGE_LOAD_FAILED`, `CONTENT_SCRIPT_UNAVAILABLE`, `TAB_CLOSED`)
 - Screenshots: `browser.tabs.captureTab(tabId)` for every tab. It renders a background tab as it is, so no tab is ever activated and a capture never disturbs the window the user is looking at. A per-tab `StateLock` in `src/capture-locks.ts` serialises every capture of a tab, annotated or not, across the annotate/captureTab/removeAnnotations section, so a plain capture can never land while another request's badges are still on the page. Readiness detection (`waitForPageReady`), purpose presets, JPEG scaling via `resizeImage` in the content script and element annotation are kept. Neither readiness nor annotation needs a visible tab, but hidden tabs throttle requestAnimationFrame and idle callbacks, so readiness must honour its own timeout
 - Frame budget: the host drops any frame above 10 MiB, so `src/handlers/screenshot.ts` measures the serialised reply against 9 MiB and re-encodes the image it already captured down a ladder (PNG to JPEG 80, quality in steps of 10 to 20, then scale x0.75 to 0.25, at most 8 steps) before failing with `SCREENSHOT_TOO_LARGE`. Every step re-encodes the same pixels through the content script, so a long page costs one render however far the ladder goes, and the result reports what was actually applied plus `reduced`
-- `eval`: runs in the content script isolated world via `new Function`, with no length cap or pattern blocklist. An opt-in gate applies: `src/handlers/dom.ts` reads `readEvaluateEnabled` from `src/settings.ts` before it messages the tab and answers `EVALUATE_DISABLED: evaluate is disabled; enable it in the add-on preferences (about:addons > firefox-ctl > Preferences)` while the setting is unset, so the terminal alone can never turn it on. The setting is read per call and an unreadable `storage.local` keeps the gate shut
+- `eval`: runs in the content script isolated world via `new Function`, with no length cap or pattern blocklist. An opt-in gate applies: `src/handlers/dom.ts` reads `readEvaluateEnabled` from `src/settings.ts` before it messages the tab and answers `EVALUATE_DISABLED: evaluate is disabled; enable it in the add-on preferences (about:addons > Terminal Control for Firefox > Preferences)` while the setting is unset, so the terminal alone can never turn it on. The setting is read per call and an unreadable `storage.local` keeps the gate shut
 
 ## Network tracker
 

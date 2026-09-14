@@ -184,7 +184,7 @@ func TestDispatchCommandFailureExitsOne(t *testing.T) {
 			name: "coded message",
 			args: []string{"evaluate", "--expression", "1 + 1"},
 			error: "EVALUATE_DISABLED: evaluate is disabled; enable it in the add-on " +
-				"preferences (about:addons > firefox-ctl > Preferences)",
+				"preferences (about:addons > Terminal Control for Firefox > Preferences)",
 		},
 	}
 

@@ -6,7 +6,7 @@ The text below is what goes into the "Notes to reviewer" field of the AMO submis
 
 ## What firefox-ctl is
 
-firefox-ctl drives Firefox from a terminal. The add-on is one half of a two-part tool: the other
+"Terminal Control for Firefox" is the add-on half of firefox-ctl, which drives Firefox from a terminal. The add-on is one half of a two-part tool: the other
 half is `firefox-ctl`, a small Go binary the user installs as a native messaging host. The user
 types `firefox-ctl getContent` in a shell, the binary passes the command to this add-on over
 native messaging, the add-on runs it against a tab and answers with JSON. There is no
@@ -57,7 +57,7 @@ attached private tab are kept in memory only and do not survive a background res
 
 ## User-facing settings
 
-Both switches live on the preferences page (about:addons > firefox-ctl > Preferences), are stored
+Both switches live on the preferences page (about:addons > Terminal Control for Firefox > Preferences), are stored
 in `storage.local` and are read on every command, so a toggle takes effect without a restart.
 No command line flag can change either of them.
 
