@@ -15,7 +15,7 @@ lint:
 release-check:
 	$(MAKE) -C cli release-check
 
-release-snapshot:
+release-snapshot: ext-xpi
 	$(MAKE) -C cli release-snapshot
 
 ext-build:

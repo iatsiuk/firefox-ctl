@@ -9,8 +9,8 @@ before:
     # license is copied in before the archives are built
     - cp ../LICENSE ./LICENSE
     # same limitation for the unsigned extension package that `make ext-xpi`
-    # built before goreleaser ran
-    - sh -c 'cp ../extension/web-ext-artifacts/firefox-ctl-[0-9]*.zip ./firefox-ctl-extension.zip'
+    # built before goreleaser ran; the script pins the exact manifest version
+    - sh scripts/extension-package.sh
 
 builds:
   - main: ./cmd/firefox-ctl
@@ -47,6 +47,9 @@ release:
 
 checksum:
   name_template: checksums.txt
+  extra_files:
+    - glob: firefox-ctl-extension.zip
+      name_template: "firefox-ctl-extension-{{ .Version }}.zip"
 
 homebrew_casks:
   - name: firefox-ctl

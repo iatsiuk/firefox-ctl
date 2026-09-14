@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -308,4 +309,34 @@ func mustSubdir(t *testing.T) string {
 	}
 
 	return subdir
+}
+
+// the real os.Executable, not the injected lookup: on macOS it reports the
+// path the process was started through, so a symlink such as Homebrew's
+// /opt/homebrew/bin/firefox-ctl is what the manifest records. Linux resolves
+// /proc/self/exe to the target, so the test only asserts on darwin.
+func TestInstallProcessKeepsSymlinkOnDarwin(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("os.Executable resolves symlinks on this platform")
+	}
+
+	bin := buildBinary(t)
+	link := filepath.Join(t.TempDir(), "firefox-ctl-link")
+
+	if err := os.Symlink(bin, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	manifestDir := t.TempDir()
+
+	out, err := exec.Command(link, "install", "--dir", manifestDir).CombinedOutput() //nolint:gosec // test-built binary path
+	if err != nil {
+		t.Fatalf("install through symlink: %v\n%s", err, out)
+	}
+
+	if got := readManifest(t, filepath.Join(manifestDir, manifestFileName)).Path; got != link {
+		t.Errorf("path = %q, want the symlink %q", got, link)
+	}
 }

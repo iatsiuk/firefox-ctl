@@ -33,7 +33,7 @@ Firefox only spawns a host it has a manifest for. Run this once, after the binar
 firefox-ctl install
 ```
 
-It writes `~/Library/Application Support/Mozilla/NativeMessagingHosts/firefoxctl.json` on macOS and `~/.mozilla/native-messaging-hosts/firefoxctl.json` on Linux - `firefox-ctl install` picks the directory from the OS it runs on, and elsewhere asks for `--dir`. The manifest carries the absolute path of the running binary, symlinks included so a Homebrew-managed link keeps working across upgrades, and `firefox-ctl@firefox-ctl.dev` in `allowed_extensions`, and prints the path it wrote. Re-running it overwrites the manifest, so repeat it after moving the binary.
+It writes `~/Library/Application Support/Mozilla/NativeMessagingHosts/firefoxctl.json` on macOS and `~/.mozilla/native-messaging-hosts/firefoxctl.json` on Linux - `firefox-ctl install` picks the directory from the OS it runs on, and elsewhere asks for `--dir`. The manifest carries the absolute path the binary was started through; on macOS that keeps a symlink such as Homebrew's `/opt/homebrew/bin/firefox-ctl`, so upgrades need no reinstall (Linux resolves `/proc/self/exe`, so there the target is recorded), and `firefox-ctl@firefox-ctl.dev` in `allowed_extensions`, and prints the path it wrote. Re-running it overwrites the manifest, so repeat it after moving the binary.
 
 ```
 firefox-ctl install --uninstall     # remove the manifest
@@ -72,7 +72,7 @@ firefox-ctl evaluate --expression "document.title"   # only after the opt-in, se
 
 `evaluate` is the one command the extension refuses by default: it answers
 `EVALUATE_DISABLED: evaluate is disabled; enable it in the add-on preferences (about:addons >
-firefox-ctl > Preferences)` until "Allow the `evaluate` command" is ticked there. The switch lives in
+Terminal Control for Firefox > Preferences)` until "Allow the `evaluate` command" is ticked there. The switch lives in
 the browser on purpose, so no flag here can lift it.
 
 Flags are the protocol parameter names verbatim, in camelCase (`--tabId`, `--maxLength`), so the CLI and the extension speak the same vocabulary. Only flags you actually set are sent, which leaves extension defaults in place; `--flag=false` is an explicit value and is sent.
