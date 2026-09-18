@@ -1,0 +1,100 @@
+<!doctype html>
+<!--
+  Manual Firefox smoke fixture for the shared selector generator.
+
+  Open over file:// or a local server with the add-on installed, then run the
+  checks listed under "Post-Completion" in docs/plans/20260918-unique-selectors.md:
+
+    firefox-ctl getPageState
+    firefox-ctl screenshot --annotate
+    firefox-ctl getElementInfo --selector "#nope"   -> alternatives with #nope-target
+    firefox-ctl getElementInfo --selector "#zzz"    -> page context, no alternatives
+    firefox-ctl getContent --selector "#nope"       -> the bare miss message
+
+  Every element that exercises an escape carries a unique `expect-*` class, so
+  the winning candidate is readable from the reported selector: an `expect-attr`
+  element must be reported by its `[data-testid=...]` or `[aria-label=...]`, an
+  `expect-id` element by its escaped `#id`. A `.expect-...` class selector or a
+  tag path there means the escaping silently failed and the smoke fails.
+
+  Nothing on this page contains the string `zzz`.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>firefox-ctl selector smoke</title>
+    <style>
+      body { font: 14px system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
+      h2 { margin-top: 2rem; font-size: 1rem; }
+      button, a, input, textarea, span { margin: 0.2rem; }
+      button { min-width: 8rem; }
+    </style>
+  </head>
+  <body>
+    <h1>firefox-ctl selector smoke</h1>
+
+    <h2>Attribute values that need CSS string escapes</h2>
+    <!-- quote and backslash survive HTML parsing, so they stay literal here -->
+    <button type="button" class="expect-attr-1" data-testid='testid with "quotes"'>attr 1</button>
+    <button type="button" class="expect-attr-2" data-testid="testid with \backslash">attr 2</button>
+    <button type="button" class="expect-attr-3" aria-label='label with "quotes"'>attr 3</button>
+    <button type="button" class="expect-attr-4" aria-label="label with \backslash">attr 4</button>
+    <!-- LF, CR and FF are normalised by the HTML parser, so a script sets them -->
+    <button type="button" class="expect-attr-5">attr 5</button>
+    <button type="button" class="expect-attr-6">attr 6</button>
+    <button type="button" class="expect-attr-7">attr 7</button>
+    <button type="button" class="expect-attr-8">attr 8</button>
+    <button type="button" class="expect-attr-9">attr 9</button>
+    <button type="button" class="expect-attr-10">attr 10</button>
+
+    <h2>Identifiers that need CSS.escape</h2>
+    <button type="button" id="1save" class="expect-id-digit">leading digit id</button>
+    <button type="button" id="form:submit" class="expect-id-colon">colon id</button>
+
+    <h2>Class tokens that need escaping or a skip</h2>
+    <p><a href="#slash" class="w-1/2 expect-class-slash">slash class link</a></p>
+    <p><a href="#colon" class="hover:bg-blue expect-class-colon">colon class link</a></p>
+
+    <h2>Duplicates that must fall through to the next candidate</h2>
+    <button type="button" id="dup-id" class="dup-id-first">duplicate id one</button>
+    <button type="button" id="dup-id" class="dup-id-second">duplicate id two</button>
+    <button type="button" data-testid="dup-testid" class="dup-testid-first">duplicate testid one</button>
+    <button type="button" data-testid="dup-testid" class="dup-testid-second">duplicate testid two</button>
+
+    <h2>Elements only a path can describe</h2>
+    <div>
+      <div><span>identical chain one</span></div>
+      <div><span>identical chain two</span></div>
+    </div>
+    <div>
+      <button type="button">Save</button>
+      <button type="button">Save</button>
+      <button type="button">Save</button>
+    </div>
+
+    <h2>Inputs and links for the other page state groups</h2>
+    <p><label for="email-field">Email address</label>
+      <input id="email-field" name="email" type="text" placeholder="you@example.com" /></p>
+    <p><textarea name="comment" placeholder="Leave a comment"></textarea></p>
+    <p><a href="https://example.com/docs">Documentation</a></p>
+
+    <h2>Near miss for the diagnostics</h2>
+    <p id="nope-target">The near candidate for a failed <code>#nope</code>.</p>
+
+    <script>
+      // the parser normalises a literal CR and cannot express FF reliably, so
+      // the whitespace escapes are set from JavaScript
+      const whitespace = [
+        ["expect-attr-5", "data-testid", "testid line\nfeed"],
+        ["expect-attr-6", "data-testid", "testid carriage\rreturn"],
+        ["expect-attr-7", "data-testid", "testid form\ffeed"],
+        ["expect-attr-8", "aria-label", "label line\nfeed"],
+        ["expect-attr-9", "aria-label", "label carriage\rreturn"],
+        ["expect-attr-10", "aria-label", "label form\ffeed"],
+      ]
+      for (const [className, attribute, value] of whitespace) {
+        document.querySelector(`.${className}`).setAttribute(attribute, value)
+      }
+    </script>
+  </body>
+</html>
