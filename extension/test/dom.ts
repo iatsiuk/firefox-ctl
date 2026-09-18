@@ -294,3 +294,50 @@ export function stubAnimations(doc: Document, animations: AnimationStub[]): void
 export function clearAnimations(doc: Document): void {
   Reflect.deleteProperty(doc, "getAnimations")
 }
+
+/**
+ * Fails unless the selector matches exactly one element and that element is the
+ * one asked about, the contract every generated selector must satisfy.
+ */
+export function assertResolves(page: Page, selector: string, element: Element): void {
+  const matches = Array.from(page.document.querySelectorAll(selector))
+  const tag = element.tagName.toLowerCase()
+  if (matches.length !== 1) {
+    throw new Error(`selector ${selector} matched ${matches.length} elements, expected <${tag}>`)
+  }
+  if (matches[0] !== element) {
+    throw new Error(`selector ${selector} matched another element, expected <${tag}>`)
+  }
+}
+
+export interface SeamPage extends Page {
+  /** Every selector string handed to `querySelectorAll`, in order. */
+  readonly queries: string[]
+}
+
+/**
+ * A page that records every `querySelectorAll` and may answer it instead of
+ * happy-dom. happy-dom's selector parser rejects strings a browser accepts
+ * (escaped quotes inside attribute values, `\31 ` identifiers), so the
+ * serialised selector and the verification decision are asserted here;
+ * `respond` returns the matches, or undefined to let the real document answer.
+ */
+export function seamPage(
+  base: Page,
+  respond: (selector: string) => Element[] | undefined = () => undefined,
+): SeamPage {
+  const queries: string[] = []
+  const document = new Proxy(base.document, {
+    get(target, key: string | symbol): unknown {
+      if (key === "querySelectorAll") {
+        return (selector: string): unknown => {
+          queries.push(selector)
+          return respond(selector) ?? target.querySelectorAll(selector)
+        }
+      }
+      const value = Reflect.get(target, key) as unknown
+      return typeof value === "function" ? value.bind(target) : value
+    },
+  }) as Document
+  return { ...base, document, queries }
+}

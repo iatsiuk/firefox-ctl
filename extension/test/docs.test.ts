@@ -44,7 +44,7 @@ describe("extension README", () => {
   test("documents loading the add-on and the first end-to-end command", async () => {
     const text = await readme.text()
     expect(text).toContain("about:debugging")
-    expect(text).toContain("Load Temporary Add-on")
+    expect(text).toContain("addons.mozilla.org")
     expect(text).toContain("firefox-ctl install")
     expect(text).toContain("firefox-ctl ping")
   })

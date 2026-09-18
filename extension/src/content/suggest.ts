@@ -1,8 +1,10 @@
-// Diagnostics for a selector that matched nothing: a stable selector for an
-// element, near-miss candidates for the failed selector and the multi-line
-// error the interaction actions throw, with search caps and reason wording.
+// Diagnostics for a selector that matched nothing: near-miss candidates for
+// the failed selector and the multi-line error the interaction actions throw,
+// with search caps and reason wording. Every suggested selector comes from the
+// shared generator, so it is verified before it is offered.
 
 import type { Page } from "./page"
+import { classTokens, uniqueSelector } from "./unique-selector"
 
 export interface Alternative {
   selector: string
@@ -13,67 +15,6 @@ export interface Alternative {
 const maxSearch = 100
 const maxAlternatives = 5
 const reasonTextLimit = 30
-
-function countMatches(page: Page, selector: string): number {
-  try {
-    return page.document.querySelectorAll(selector).length
-  } catch {
-    return 0
-  }
-}
-
-function classTokens(element: Element): string[] {
-  const names = element.className
-  if (typeof names !== "string" || !names) {
-    return []
-  }
-  // a Tailwind-style `hover:` prefix needs escaping the utility rarely survives
-  return names.split(/\s+/).filter((name) => name && !name.includes(":"))
-}
-
-function tagPath(page: Page, element: Element): string {
-  const segments: string[] = []
-  let current: Element | null = element
-  while (current !== null && current !== page.document.body) {
-    const parent: Element | null = current.parentElement
-    let segment = current.tagName.toLowerCase()
-    if (parent !== null) {
-      const tag = current.tagName
-      const siblings = Array.from(parent.children).filter((child) => child.tagName === tag)
-      if (siblings.length > 1) {
-        segment += `:nth-of-type(${siblings.indexOf(current) + 1})`
-      }
-    }
-    segments.unshift(segment)
-    current = parent
-  }
-  return segments.join(" > ")
-}
-
-/** The shortest selector that picks out this element alone: id, classes, aria-label, path. */
-export function generateUniqueSelector(page: Page, element: Element): string {
-  if (element.id) {
-    return `#${element.id}`
-  }
-
-  const classes = classTokens(element)
-  if (classes.length > 0) {
-    const classSelector = classes.map((name) => `.${page.cssEscape(name)}`).join("")
-    if (countMatches(page, classSelector) === 1) {
-      return classSelector
-    }
-  }
-
-  const ariaLabel = element.getAttribute("aria-label")
-  if (ariaLabel) {
-    const ariaSelector = `[aria-label="${ariaLabel.replace(/"/g, '\\"')}"]`
-    if (countMatches(page, ariaSelector) === 1) {
-      return ariaSelector
-    }
-  }
-
-  return tagPath(page, element)
-}
 
 function scan(page: Page, selector: string): Element[] {
   return Array.from(page.document.querySelectorAll(selector)).slice(0, maxSearch)
@@ -98,8 +39,18 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
   const alternatives: Alternative[] = []
   const seen = new Set<string>()
 
-  function add(selector: string, reason: string): void {
-    if (alternatives.length >= maxAlternatives || seen.has(selector)) {
+  function add(element: Element, reason: string): void {
+    if (alternatives.length >= maxAlternatives) {
+      return
+    }
+    let selector: string
+    try {
+      selector = uniqueSelector(page, element)
+    } catch {
+      // nothing describes this element uniquely: suggesting it would mislead
+      return
+    }
+    if (seen.has(selector)) {
       return
     }
     seen.add(selector)
@@ -117,7 +68,7 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
     const wanted = idMatch[1].toLowerCase()
     for (const element of scan(page, "[id]")) {
       if (element.id.toLowerCase().includes(wanted)) {
-        add(`#${element.id}`, "Similar ID found")
+        add(element, "Similar ID found")
       }
     }
   }
@@ -127,7 +78,7 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
     const wanted = classMatch[1].toLowerCase()
     for (const element of scan(page, "[class]")) {
       if (classTokens(element).some((name) => name.toLowerCase().includes(wanted))) {
-        add(generateUniqueSelector(page, element), "Similar class found")
+        add(element, "Similar class found")
       }
     }
   }
@@ -145,7 +96,7 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
         (hint && (text.toLowerCase().includes(hint) || label.includes(hint))) ||
         (isButtonSelector && text)
       if (matches) {
-        add(generateUniqueSelector(page, element), `Button: "${text.slice(0, reasonTextLimit)}"`)
+        add(element, `Button: "${text.slice(0, reasonTextLimit)}"`)
       }
     }
   }
@@ -155,7 +106,7 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
     for (const element of scan(page, "a[href]")) {
       const text = (element.textContent ?? "").trim()
       if (hint && text.toLowerCase().includes(hint)) {
-        add(generateUniqueSelector(page, element), `Link: "${text.slice(0, reasonTextLimit)}"`)
+        add(element, `Link: "${text.slice(0, reasonTextLimit)}"`)
       }
     }
   }
@@ -164,7 +115,7 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
     for (const element of scan(page, "[aria-label]")) {
       const label = element.getAttribute("aria-label") ?? ""
       if (label.toLowerCase().includes(hint)) {
-        add(generateUniqueSelector(page, element), `aria-label="${label}"`)
+        add(element, `aria-label="${label}"`)
       }
     }
   }

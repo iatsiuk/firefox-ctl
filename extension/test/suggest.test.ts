@@ -1,12 +1,8 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 
 import type { Page } from "../src/content/page"
-import {
-  buildElementNotFoundError,
-  findSelectorAlternatives,
-  generateUniqueSelector,
-} from "../src/content/suggest"
-import { fakePage, stubLocation, stubTop } from "./dom"
+import { buildElementNotFoundError, findSelectorAlternatives } from "../src/content/suggest"
+import { assertResolves, fakePage, stubLocation, stubTop } from "./dom"
 import errors from "./fixtures/errors.json"
 
 beforeEach(() => {
@@ -22,82 +18,6 @@ function el(selector: string): Element {
   return found
 }
 
-describe("generateUniqueSelector", () => {
-  test("prefers the id", () => {
-    document.body.innerHTML = '<button id="go" class="btn primary" aria-label="Go">Go</button>'
-    expect(generateUniqueSelector(fakePage(), el("#go"))).toBe("#go")
-  })
-
-  test("falls back to a unique class combination", () => {
-    document.body.innerHTML =
-      '<button class="btn primary" aria-label="Go">Go</button><button class="btn">Other</button>'
-    expect(generateUniqueSelector(fakePage(), el(".primary"))).toBe(".btn.primary")
-  })
-
-  test("escapes class names and skips pseudo-class utilities", () => {
-    document.body.innerHTML = '<div class="hover:bg-red w-1/2">x</div><div class="other">y</div>'
-    expect(generateUniqueSelector(fakePage(), el(".other + div, div"))).toBe(".w-1\\/2")
-  })
-
-  test("uses aria-label when the classes are not unique", () => {
-    document.body.innerHTML =
-      '<button class="btn" aria-label="Send message">a</button><button class="btn">b</button>'
-    expect(generateUniqueSelector(fakePage(), el("[aria-label]"))).toBe(
-      '[aria-label="Send message"]',
-    )
-  })
-
-  test("escapes quotes inside the aria-label", () => {
-    document.body.innerHTML =
-      '<button class="btn" aria-label=\'say "hi"\'>a</button><button class="btn">b</button>'
-    const labelled = el("[aria-label]")
-    const base = fakePage()
-    // happy-dom's selector parser rejects an escaped quote inside an attribute
-    // value, so the match is counted the way a real browser counts it
-    const page: Page = {
-      ...base,
-      document: new Proxy(base.document, {
-        get(target, key: string | symbol): unknown {
-          if (key === "querySelectorAll") {
-            return (selector: string): unknown =>
-              selector === '[aria-label="say \\"hi\\""]'
-                ? [labelled]
-                : target.querySelectorAll(selector)
-          }
-          const value = Reflect.get(target, key) as unknown
-          return typeof value === "function" ? value.bind(target) : value
-        },
-      }) as Document,
-    }
-    expect(generateUniqueSelector(page, labelled)).toBe('[aria-label="say \\"hi\\""]')
-  })
-
-  test("falls back to a tag path with nth-of-type", () => {
-    document.body.innerHTML = "<main><section><p>one</p><p>two</p></section></main>"
-    const page = fakePage()
-    expect(generateUniqueSelector(page, el("main > section > p:nth-of-type(2)"))).toBe(
-      "main > section > p:nth-of-type(2)",
-    )
-    expect(generateUniqueSelector(page, el("section"))).toBe("main > section")
-  })
-
-  test("stops the path below the body", () => {
-    document.body.innerHTML = "<div><span>x</span></div>"
-    expect(generateUniqueSelector(fakePage(), el("span"))).toBe("div > span")
-  })
-
-  test("keeps the path when a selector is syntactically invalid", () => {
-    // an unescapable class cannot make a valid selector, so the path wins
-    document.body.innerHTML = '<div><span class="a">x</span></div>'
-    const span = el("span")
-    const page: Page = {
-      ...fakePage(),
-      cssEscape: (value: string) => value.replace("a", "["),
-    }
-    expect(generateUniqueSelector(page, span)).toBe("div > span")
-  })
-})
-
 describe("findSelectorAlternatives", () => {
   test("suggests ids that contain the failed id fragment", () => {
     document.body.innerHTML = '<input id="search-input"><input id="searchbox"><input id="other">'
@@ -105,6 +25,23 @@ describe("findSelectorAlternatives", () => {
       { selector: "#search-input", reason: "Similar ID found" },
       { selector: "#searchbox", reason: "Similar ID found" },
     ])
+  })
+
+  test("routes the id suggestions through the verified generator", () => {
+    document.body.innerHTML =
+      '<div id="dup-save" class="alpha">a</div>' +
+      '<div id="dup-save" class="beta">b</div>' +
+      '<input id="1save" class="digit-save">'
+    const page = fakePage()
+
+    const alternatives = findSelectorAlternatives(page, "#sav")
+
+    // the shared id is ambiguous and the leading digit needs escaping, so no
+    // suggestion may be the raw `#id` the element carries
+    expect(alternatives.map((item) => item.selector)).toEqual([".alpha", ".beta", ".digit-save"])
+    expect(alternatives.every((item) => item.reason === "Similar ID found")).toBe(true)
+    assertResolves(page, alternatives[0]?.selector ?? "", el("#dup-save"))
+    assertResolves(page, alternatives[2]?.selector ?? "", el(".digit-save"))
   })
 
   test("suggests elements whose class contains the failed class fragment", () => {
@@ -138,7 +75,7 @@ describe("findSelectorAlternatives", () => {
   test("matches an aria-label hint on any element", () => {
     document.body.innerHTML = '<div class="menu" aria-label="Main menu">m</div>'
     expect(findSelectorAlternatives(fakePage(), '[aria-label="main"]')).toEqual([
-      { selector: ".menu", reason: 'aria-label="Main menu"' },
+      { selector: '[aria-label="Main menu"]', reason: 'aria-label="Main menu"' },
     ])
   })
 
