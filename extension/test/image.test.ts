@@ -12,8 +12,9 @@ import {
   removeAnnotations,
   resizeImageAction,
 } from "../src/content/image"
+import type { Page } from "../src/content/page"
 import type { JsonObject } from "../src/protocol"
-import { fakePage, stubRect, stubScroll } from "./dom"
+import { assertResolves, fakePage, seamPage, stubRect, stubScroll } from "./dom"
 import errors from "./fixtures/errors.json"
 
 interface ResizeCall {
@@ -122,6 +123,21 @@ function labelsOf(result: unknown): JsonObject {
   return (result as { labels: JsonObject }).labels
 }
 
+function selectorOf(labels: JsonObject, index: string): string | null {
+  return (labels[index] as { selector: string | null }).selector
+}
+
+/** Every label selector must resolve back to the element it badged. */
+function expectLabelsResolve(page: Page, labels: JsonObject, badged: Record<string, string>) {
+  for (const [index, fixture] of Object.entries(badged)) {
+    const element = document.querySelector(fixture)
+    if (element === null) {
+      throw new Error(`fixture element missing: ${fixture}`)
+    }
+    assertResolves(page, selectorOf(labels, index) as string, element)
+  }
+}
+
 beforeEach(() => {
   attachShadowOriginal = Element.prototype.attachShadow
 })
@@ -140,11 +156,17 @@ describe("annotateElements", () => {
     expect(result).toEqual({
       labels: {
         "1": { selector: "#save", text: "Save", role: "button" },
-        "3": { selector: "a.nav.link", text: "Docs", role: "a" },
-        "4": { selector: "input", text: "Search", role: "input" },
-        "5": { selector: "span", text: "x", role: "button" },
+        "3": { selector: ".nav.link", text: "Docs", role: "a" },
+        "4": { selector: "body > input", text: "Search", role: "input" },
+        "5": { selector: '[aria-label="Close"]', text: "x", role: "button" },
       },
       count: 4,
+    })
+    expectLabelsResolve(page, labelsOf(result), {
+      "1": "#save",
+      "3": "a[href]",
+      "4": "input",
+      "5": "span",
     })
   })
 
@@ -176,14 +198,66 @@ describe("annotateElements", () => {
     expect(Object.keys(labelsOf(result))).toEqual(["1"])
   })
 
-  test("falls back to the tag name when the element has no id or class", () => {
+  test("falls back to the path when the element has no id or class", () => {
     const page = fakePage()
     document.body.innerHTML = "<button>Go</button>"
     stubRect(document.querySelector("button") as Element, { width: 10, height: 10 })
 
     const result = annotateElements({}, page)
 
-    expect(labelsOf(result)["1"]).toEqual({ selector: "button", text: "Go", role: "button" })
+    expect(labelsOf(result)["1"]).toEqual({
+      selector: "body > button",
+      text: "Go",
+      role: "button",
+    })
+    expectLabelsResolve(page, labelsOf(result), { "1": "button" })
+  })
+
+  test("separates two elements that share their class list", () => {
+    const page = fakePage()
+    document.body.innerHTML = '<button class="btn">One</button><button class="btn">Two</button>'
+    for (const button of document.querySelectorAll("button")) {
+      stubRect(button, { width: 10, height: 10 })
+    }
+
+    const labels = labelsOf(annotateElements({}, page))
+
+    expect(selectorOf(labels, "1")).toBe("body > button:nth-of-type(1)")
+    expect(selectorOf(labels, "2")).toBe("body > button:nth-of-type(2)")
+    expectLabelsResolve(page, labels, {
+      "1": "button:nth-of-type(1)",
+      "2": "button:nth-of-type(2)",
+    })
+  })
+
+  test("escapes an id starting with a digit", () => {
+    document.body.innerHTML = '<button id="1save">Save</button>'
+    const target = document.querySelector("button") as Element
+    stubRect(target, { width: 10, height: 10 })
+    // happy-dom does not resolve a `\31 ` identifier the way Firefox does, so
+    // the serialised candidate and its acceptance are asserted through the seam
+    const page = seamPage(fakePage(), (selector) =>
+      selector === "#\\31 save" ? [target] : undefined,
+    )
+
+    const labels = labelsOf(annotateElements({}, page))
+
+    expect(selectorOf(labels, "1")).toBe("#\\31 save")
+  })
+
+  test("reports a null selector for an element it cannot describe, badge and all", () => {
+    document.body.innerHTML = "<button>Go</button>"
+    stubRect(document.querySelector("button") as Element, { width: 10, height: 10 })
+    // no candidate verifies: the path query answers with no match at all
+    const page = seamPage(fakePage(), (selector) =>
+      selector.startsWith("body >") ? [] : undefined,
+    )
+    const spy = spyOnShadow()
+
+    const labels = labelsOf(annotateElements({}, page))
+
+    expect(labels["1"]).toEqual({ selector: null, text: "Go", role: "button" })
+    expect([...(spy.root?.children ?? [])].map((badge) => badge.textContent)).toEqual(["1"])
   })
 
   test("replaces a stale host instead of leaving a duplicate behind", () => {

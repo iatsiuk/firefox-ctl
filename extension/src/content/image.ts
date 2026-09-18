@@ -9,6 +9,7 @@
 import type { JsonObject, JsonValue } from "../protocol"
 import type { Page } from "./page"
 import type { Action } from "./registry"
+import { SelectorUnavailable, uniqueSelector } from "./unique-selector"
 
 /** The id of the host element the badges hang under. */
 export const ANNOTATION_HOST_ID = "__firefox_ctl_annotations__"
@@ -158,14 +159,16 @@ function collect(page: Page, maxElements: number): Element[] {
   return elements
 }
 
-/** id first, then the class list, and the tag name when there is neither. */
-function selectorFor(element: Element): string {
-  if (element.id !== "") {
-    return `#${element.id}`
+/** The shared generator, or null when nothing describes the element uniquely. */
+function selectorFor(page: Page, element: Element): string | null {
+  try {
+    return uniqueSelector(page, element)
+  } catch (error) {
+    if (error instanceof SelectorUnavailable) {
+      return null
+    }
+    throw error
   }
-  const tag = element.tagName.toLowerCase()
-  const className = element.getAttribute("class")?.trim() ?? ""
-  return className === "" ? tag : `${tag}.${className.split(/\s+/).join(".")}`
 }
 
 function labelText(element: Element): string {
@@ -229,7 +232,7 @@ export function annotateElements(params: JsonObject, page: Page): JsonValue {
     }
     shadow.appendChild(badgeFor(page, element, index))
     labels[String(index)] = {
-      selector: selectorFor(element),
+      selector: selectorFor(page, element),
       text: labelText(element),
       role: element.getAttribute("role") ?? element.tagName.toLowerCase(),
     }
