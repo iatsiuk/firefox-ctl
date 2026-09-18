@@ -8,13 +8,15 @@ Inspired by [claudezilla](https://claudezilla.com/).
 
 - macOS or Linux
 - Firefox 155 or newer
-- Go 1.25 or newer
-- golangci-lint, used by `make -C cli build`
-- Bun 1.4 or newer
+- To build from source: Go 1.25 or newer, golangci-lint (used by `make -C cli build`), Bun 1.4 or newer
 
 ## Install
 
-### Homebrew
+Two parts: the `firefox-ctl` binary with its native-messaging manifest, and the Firefox add-on.
+
+### 1. Binary
+
+Homebrew:
 
 ```sh
 brew install --cask iatsiuk/tap/firefox-ctl
@@ -23,9 +25,17 @@ firefox-ctl install
 
 The manifest points at Homebrew's `firefox-ctl` link, so upgrades need no reinstall.
 
-### From releases
+Or download the archive for your platform from the [GitHub Releases](https://github.com/iatsiuk/firefox-ctl/releases) page (macOS arm64, Linux amd64, Linux arm64), put `firefox-ctl` somewhere permanent and run `firefox-ctl install`.
 
-Download the archive for your platform from the [GitHub Releases](https://github.com/iatsiuk/firefox-ctl/releases) page (macOS arm64, Linux amd64, Linux arm64), put `firefox-ctl` somewhere permanent and run `firefox-ctl install`. Each release also carries `firefox-ctl-extension-<version>.zip`, the unsigned add-on package; release Firefox only installs the signed build, so this one is for Developer Edition, Nightly, ESR or any build with `xpinstall.signatures.required` set to false.
+### 2. Add-on
+
+Install [Terminal Control for Firefox](https://addons.mozilla.org/en-US/firefox/addon/firefox-ctl/) from addons.mozilla.org. Firefox starts the native host itself; there is no daemon to run by hand.
+
+```sh
+firefox-ctl ping
+```
+
+Each GitHub release also carries `firefox-ctl-extension-<version>.zip`, the unsigned add-on package. Release Firefox only installs the signed AMO build, so that one is for Developer Edition, Nightly, ESR or any build with `xpinstall.signatures.required` set to false.
 
 ### From source
 
@@ -38,8 +48,6 @@ cd extension && bun install && bun run build
 ```
 
 `firefox-ctl install` writes the native-messaging manifest to `~/Library/Application Support/Mozilla/NativeMessagingHosts/firefoxctl.json` on macOS and to `~/.mozilla/native-messaging-hosts/firefoxctl.json` on Linux. It records the binary's absolute path, so run it again after moving the binary. On any other system there is no default directory and `--dir` is required.
-
-In Firefox, open `about:debugging`, choose "This Firefox", then "Load Temporary Add-on" and select `extension/manifest.json`. Firefox starts the native host itself.
 
 ```sh
 cli/firefox-ctl ping
@@ -79,7 +87,6 @@ Large replies are kept below the host's 10 MiB extension-to-host frame cap. fire
 
 - This is a single-user tool. There is no auth token, command allowlist, or URL allowlist. The Unix-socket directory is mode 0700 and the socket is mode 0600.
 - `evaluate` is off by default. It runs only after you tick "Allow the `evaluate` command" in the add-on preferences (about:addons > Terminal Control for Firefox > Preferences); until then it fails with `EVALUATE_DISABLED` and no page is touched. Nothing on the command line can turn it on.
-- The add-on is temporary. Firefox removes it when Firefox closes; load it again after a restart. Reload it after `bun run build`.
 - `createWindow` requests a private window by default. If the add-on lacks Firefox's private-window permission, it falls back to a normal window and returns `privateFallback: true` and `modeWarning`.
 - Content scripts cannot run on restricted browser or extension pages such as `about:` and `moz-extension:`. Those return `RESTRICTED_PAGE`. JSON, PDF, download, and other non-HTML pages return `CONTENT_SCRIPT_ERROR` when detected.
 - Only the top-level document is scripted (`all_frames: false`). Commands, including `handleConsent`, do not operate inside any iframe.
@@ -101,7 +108,7 @@ make ext-check
 make ext-build
 ```
 
-Architecture, transport, and lifecycle details are in [docs/architecture.md](docs/architecture.md). The Firefox extension has additional build and temporary-add-on instructions in [extension/README.md](extension/README.md).
+Architecture, transport, and lifecycle details are in [docs/architecture.md](docs/architecture.md). The Firefox extension has additional build instructions in [extension/README.md](extension/README.md).
 
 ## License
 

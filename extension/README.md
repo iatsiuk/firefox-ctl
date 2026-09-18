@@ -74,9 +74,10 @@ happy-dom is registered through the `bunfig.toml` preload for the DOM side.
    binary and `firefox-ctl@firefox-ctl.dev` in `allowed_extensions`. Re-run it after moving
    the binary.
 
-3. Load the add-on: `about:debugging` -> This Firefox -> Load Temporary Add-on ->
-   pick `extension/manifest.json`. Firefox starts the host on its own; there is no daemon
-   to run by hand. "Inspect" opens the background console, where the link logs connects,
+3. Install the add-on from AMO:
+   [Terminal Control for Firefox](https://addons.mozilla.org/en-US/firefox/addon/firefox-ctl/).
+   Firefox starts the host on its own; there is no daemon to run by hand. "Inspect" in
+   about:debugging opens the background console, where the link logs connects,
    disconnects and reconnect attempts.
 
 4. Talk to it:
@@ -86,7 +87,6 @@ happy-dom is registered through the `bunfig.toml` preload for the DOM side.
    cli/firefox-ctl version    # extension version and features
    ```
 
-A temporary add-on is dropped when Firefox closes, so repeat step 3 after a restart.
 Reloading the add-on after a rebuild restarts the background page and reconnects the port.
 
 ## A session, end to end
@@ -164,7 +164,7 @@ the DOM but not the page's own globals, and an expression that throws comes back
 result with `type: "error"`.
 
 `evaluate` is off until you tick "Allow the `evaluate` command" in the add-on preferences
-(about:addons > Terminal Control for Firefox > Preferences, or the Preferences tab of the temporary add-on). Until
+(about:addons > Terminal Control for Firefox > Preferences). Until
 then the command fails with `EVALUATE_DISABLED` and the tab is never messaged. The page is
 `options.html` over `src/options.ts`; the same page holds the header redaction switch. Both
 settings live in `storage.local` and are read on every command, so a toggle needs no restart.

@@ -40,7 +40,7 @@ firefox-ctl install --uninstall     # remove the manifest
 firefox-ctl install --dir <path>    # write somewhere else, required outside macOS and Linux
 ```
 
-Load the extension from `../extension` (about:debugging, "Load Temporary Add-on") and Firefox starts the host on its own. There is no daemon to run by hand.
+Install the add-on from [AMO](https://addons.mozilla.org/en-US/firefox/addon/firefox-ctl/) and Firefox starts the host on its own. There is no daemon to run by hand.
 
 ## Host mode
 
