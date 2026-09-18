@@ -186,9 +186,9 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
         element.getAttribute("placeholder") ?? "",
         element.getAttribute("aria-label") ?? "",
       ]
-      if (described.some((value) => value.toLowerCase().includes(hint))) {
-        const name = described.find((value) => value !== "") ?? ""
-        add(element, `Input: "${name.slice(0, reasonTextLimit)}"`)
+      const matched = described.find((value) => value.toLowerCase().includes(hint))
+      if (matched !== undefined) {
+        add(element, `Input: "${matched.slice(0, reasonTextLimit)}"`)
       }
     }
   }

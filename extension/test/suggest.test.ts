@@ -282,6 +282,16 @@ describe("form-aware alternatives", () => {
     }
   })
 
+  test("reports the field that actually matched the hint, not the first non-empty one", () => {
+    document.body.innerHTML =
+      '<label for="mixed-field">Full Name</label><input id="mixed-field" placeholder="Your mail here">'
+    const page = fakePage()
+
+    const alternatives = findSelectorAlternatives(page, '[aria-label="mail"]')
+
+    expect(alternatives).toEqual([{ selector: "#mixed-field", reason: 'Input: "Your mail here"' }])
+  })
+
   test("reaches the new passes through getElementInfo", () => {
     const extra = '<div data-testid="submit-btn">go</div><input id="x-field" aria-label="Mail">'
     document.body.innerHTML = FORM_HTML + extra
