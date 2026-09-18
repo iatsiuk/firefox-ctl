@@ -331,6 +331,34 @@ describe("screenshot and DevTools documentation", () => {
   })
 })
 
+describe("selector documentation", () => {
+  test.skipIf(root === undefined)(
+    "commands.md states the selector guarantee for page state, misses and labels",
+    async () => {
+      const text = await readRootDoc(join("docs", "commands.md"))
+      for (const phrase of [
+        "unique in the current DOM at the time of the call",
+        "not stable across re-renders",
+        "`selector`",
+        "`null` when no verified selector exists",
+        "Suggested alternatives:",
+        "CSS-escaped",
+      ]) {
+        expect(text).toContain(phrase)
+      }
+      expect(text).not.toContain("without suggestions")
+    },
+  )
+
+  test.skipIf(root === undefined)(
+    "architecture.md lists the shared selector generator",
+    async () => {
+      const text = await readRootDoc(join("docs", "architecture.md"))
+      expect(text).toContain("unique-selector.ts")
+    },
+  )
+})
+
 describe("session documentation", () => {
   test.skipIf(root === undefined)(
     "commands.md describes the session model without agent ids",

@@ -83,10 +83,30 @@ its value fails the same way: `text is required` for `type`, `key is required` f
 
 | Command | Params | Notes |
 |---|---|---|
-| getPageState | [maxHeadings=30], [maxLinks=50], [maxButtons=30], [maxInputs=30], [maxImages=20] | the limits are forwarded to the content script. `{url, title, viewport, errors, headings, links, buttons, inputs, images, landmarks, counts}`; links, buttons and inputs are filtered to visible elements and images to those larger than 20x20, but headings and landmarks are listed regardless of visibility; password values are masked as `***`, input labels come from `aria-label`, `placeholder` or `label[for]`, images need alt text and more than 20x20; `counts` holds `{shown, total}` per group. `errors` holds the messages of the last 10 captured `error` entries, so it stays `[]` until the first `getConsoleLogs` turns console capture on (see DevTools) |
+| getPageState | [maxHeadings=30], [maxLinks=50], [maxButtons=30], [maxInputs=30], [maxImages=20] | the limits are forwarded to the content script. `{url, title, viewport, errors, headings, links, buttons, inputs, images, landmarks, counts}`; links, buttons and inputs are filtered to visible elements and images to those larger than 20x20, but headings and landmarks are listed regardless of visibility; password values are masked as `***`, input labels come from `aria-label`, `placeholder` or `label[for]`, images need alt text and more than 20x20; `counts` holds `{shown, total}` per group. Every returned link, button and input also carries a `selector`, generated for the entries that survive the limits, not for the ones dropped by them; see Selectors below. `errors` holds the messages of the last 10 captured `error` entries, so it stays `[]` until the first `getConsoleLogs` turns console capture on (see DevTools) |
 | getAccessibilitySnapshot | [selector=body], [maxDepth=5], [maxNodes=200] | `{url, title, tree, nodeCount, maxNodes, truncated}`; invisible nodes are skipped except the root, a `div`/`span`/`p` with no role, name or text collapses into its children, node fields are `role, name, text, disabled, checked, expanded, selected, value` and appear only when set |
-| getElementInfo | selector | `{selector, tagName, attributes, text, visible, position, styles}` with the computed `display`, `visibility`, `opacity`, `color`, `backgroundColor` and `fontSize`; a missing element errors `Element not found: <selector>` without suggestions |
+| getElementInfo | selector | `{selector, tagName, attributes, text, visible, position, styles}` with the computed `display`, `visibility`, `opacity`, `color`, `backgroundColor` and `fontSize`; a missing element errors `Element not found: <selector>` with the same diagnostics as `click` and `type`: `Suggested alternatives:` when the page holds a near candidate, then `Page context:`. `getContent` keeps the bare message |
 | evaluate | expression | off until the user ticks "Allow the `evaluate` command" in the add-on preferences (about:addons > Terminal Control for Firefox > Preferences); while it is off the command fails with `EVALUATE_DISABLED: evaluate is disabled; enable it in the add-on preferences (about:addons > Terminal Control for Firefox > Preferences)` and no message reaches the tab. The opt-in is read on every call, so a toggle takes effect at once, and only the browser can set it - no CLI flag turns it on. Once on there is no length cap or blocklist; it runs `new Function("return (<expression>)")` in the content script's isolated world, so only the DOM is reachable, not the page's own globals. `{expression, result, type}` with `result` JSON round-tripped (anything unserialisable becomes its string form); a throwing expression is a successful reply with `{expression, error, type: "error"}` |
+
+### Selectors
+
+`getPageState` entries, `screenshot --annotate` labels and every suggested alternative of an
+`Element not found` message come from one generator. Its guarantee is narrow and exact: the
+returned selector matches exactly one element in the light DOM of the page document and that
+element is the one described, so it is
+unique in the current DOM at the time of the call.
+It is not stable across re-renders - a framework that rebuilds the tree may invalidate it, so
+a selector is meant to be used right away, not stored. Every candidate is verified with
+`querySelectorAll` before it is returned, and where none verifies the field is
+`null` when no verified selector exists,
+never an unverified guess. A shadow-root or detached element is the documented failure case.
+
+Candidates are tried in order: `[data-testid="..."]`, `[aria-label="..."]`, `#id` (after the
+class combination when the id looks generated - all digits, a run of six hex characters or a
+trailing `-<digits>`), the element's class combination, then an `:nth-of-type` path rooted at
+`body`; identifiers and attribute values are CSS-escaped, identifiers through `CSS.escape` and
+attribute values as double-quoted CSS strings, so an id starting with a digit or a
+`data-testid` holding a quote, a backslash or a newline still resolves.
 
 ## Screenshots
 
@@ -117,8 +137,10 @@ also carry `originalSize` and `scaledSize`.
 `--annotate true` numbers up to 30 interactive elements (`button`, `a[href]`, `input`,
 `select`, `textarea`, `[role=button]`, `[role=link]`, in that order) with red badges and
 returns `labels`, a map from the badge number to `{selector, text, role}`, so a vision model
-can read a number off the image and hand it back as a selector. The badges live in a closed
-shadow root under `__firefox_ctl_annotations__`, out of reach of the page's CSS and scripts, and
+can read a number off the image and hand it back as a selector. `labels[n].selector` comes from
+the generator of Selectors above and carries its guarantee; it is `string | null`, `null` for an
+element the generator cannot describe, which still keeps its badge, text and role. The badges
+live in a closed shadow root under `__firefox_ctl_annotations__`, out of reach of the page's CSS and scripts, and
 are removed after the capture, including when the capture fails. An element with no box at
 all is skipped. Annotation is cosmetic: a page that refuses it is still captured, just
 without `labels`.
