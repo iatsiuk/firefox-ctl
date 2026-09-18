@@ -6,6 +6,7 @@ import type { JsonObject, JsonValue } from "../protocol"
 import { capturedErrors } from "./console"
 import type { Page } from "./page"
 import { safeQuerySelector } from "./selector"
+import { buildElementNotFoundError } from "./suggest"
 import { SelectorUnavailable, uniqueSelector } from "./unique-selector"
 import { isRendered } from "./visibility"
 
@@ -103,7 +104,11 @@ export function getContent(params: JsonObject, page: Page): JsonValue {
 }
 
 export function getElementInfo(params: JsonObject, page: Page): JsonValue {
-  const element = requireElement(page, params.selector)
+  // unlike getContent, a miss here reports near-miss selectors and page context
+  const element = safeQuerySelector(page, params.selector)
+  if (!element) {
+    throw buildElementNotFoundError(page, String(params.selector), "getElementInfo")
+  }
   const rect = element.getBoundingClientRect()
   const styles = page.window.getComputedStyle(element)
 

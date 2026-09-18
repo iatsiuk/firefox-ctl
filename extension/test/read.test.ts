@@ -49,6 +49,16 @@ function el(selector: string): Element {
   return found
 }
 
+/** The message of the error a call throws; fails the test when it throws none. */
+function messageOf(run: () => unknown): string {
+  try {
+    run()
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+  throw new Error("expected a throw")
+}
+
 /** happy-dom has no layout: every element gets a box unless listed in `hidden`. */
 function showAll(hidden: string[] = []): void {
   const invisible = new Set<Element>()
@@ -126,8 +136,11 @@ describe("getContent", () => {
     })
   })
 
-  test("reports a missing element", () => {
-    expect(() => getContent({ selector: "#nope" }, fixturePage())).toThrow(
+  test("reports a missing element with the bare message", () => {
+    const page = fixturePage()
+    document.body.insertAdjacentHTML("beforeend", '<button id="nope-target">Go</button>')
+    // getContent keeps the one-line miss; only getElementInfo gained diagnostics
+    expect(messageOf(() => getContent({ selector: "#nope" }, page))).toBe(
       "Element not found: #nope",
     )
   })
@@ -142,10 +155,24 @@ describe("getElementInfo", () => {
     expect(getElementInfo({ selector: "#intro" }, fixturePage())).toEqual(elementInfoFixture)
   })
 
-  test("reports a missing element", () => {
-    expect(() => getElementInfo({ selector: "#nope" }, fixturePage())).toThrow(
-      "Element not found: #nope",
-    )
+  test("reports a missing element with alternatives and page context", () => {
+    const page = fixturePage()
+    document.body.insertAdjacentHTML("beforeend", '<button id="nope-target">Go</button>')
+
+    const message = messageOf(() => getElementInfo({ selector: "#nope" }, page))
+
+    expect(message.startsWith("Element not found: #nope")).toBe(true)
+    expect(message).toContain(errors.notFoundSuggestions)
+    expect(message).toContain("  - #nope-target (Similar ID found)")
+    expect(message).toContain(errors.notFoundContext)
+  })
+
+  test("reports a miss without alternatives when nothing is close", () => {
+    const message = messageOf(() => getElementInfo({ selector: "#zzz" }, fixturePage()))
+
+    expect(message.startsWith("Element not found: #zzz")).toBe(true)
+    expect(message).not.toContain(errors.notFoundSuggestions)
+    expect(message).toContain(errors.notFoundContext)
   })
 
   test("requires a selector", () => {

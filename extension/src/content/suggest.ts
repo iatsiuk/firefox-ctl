@@ -16,6 +16,8 @@ const maxSearch = 100
 const maxAlternatives = 5
 const reasonTextLimit = 30
 
+const fieldSelector = "input, textarea, select"
+
 function scan(page: Page, selector: string): Element[] {
   return Array.from(page.document.querySelectorAll(selector)).slice(0, maxSearch)
 }
@@ -23,6 +25,55 @@ function scan(page: Page, selector: string): Element[] {
 function controlText(element: Element): string {
   const value = (element as Element & { value?: string }).value
   return (element.textContent || value || "").trim()
+}
+
+// the value literal of `[name=...]` or `[data-testid=...]`, quoted or bare
+function attributeLiteral(failedSelector: string, attribute: string): string {
+  const pattern = new RegExp(
+    `\\[${attribute}[*~|^$]?=\\s*(?:"([^"]*)"|'([^']*)'|([^\\]\\s]+))`,
+    "i",
+  )
+  const match = failedSelector.match(pattern)
+  return match?.[1] ?? match?.[2] ?? match?.[3] ?? ""
+}
+
+/** `email-1` and `email_1` become `email`; anything else yields nothing. */
+function withoutIndexSuffix(value: string): string {
+  const stripped = value.replace(/[-_]\d+$/, "")
+  return stripped === value ? "" : stripped
+}
+
+/**
+ * Elements whose attribute contains the wanted value, retried once without a
+ * trailing index when the direct pass found nothing.
+ */
+function byAttributeValue(
+  page: Page,
+  wanted: string,
+  scanSelector: string,
+  read: (element: Element) => string,
+): Element[] {
+  const elements = scan(page, scanSelector)
+  const hits = (needle: string): Element[] =>
+    needle ? elements.filter((element) => read(element).toLowerCase().includes(needle)) : []
+  const direct = hits(wanted.toLowerCase())
+  return direct.length > 0 ? direct : hits(withoutIndexSuffix(wanted).toLowerCase())
+}
+
+function attributeOf(name: string): (element: Element) => string {
+  return (element) => element.getAttribute(name) ?? ""
+}
+
+/** The text of every `label[for]`, keyed by the id the label points at. */
+function labelTexts(page: Page): Map<string, string> {
+  const texts = new Map<string, string>()
+  for (const label of scan(page, "label[for]")) {
+    const target = label.getAttribute("for") ?? ""
+    if (target && !texts.has(target)) {
+      texts.set(target, (label.textContent ?? "").trim())
+    }
+  }
+  return texts
 }
 
 function textHint(failedSelector: string): string {
@@ -83,6 +134,22 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
     }
   }
 
+  const wantedName = attributeLiteral(failedSelector, "name")
+  if (wantedName && !full()) {
+    const fields = byAttributeValue(page, wantedName, fieldSelector, attributeOf("name"))
+    for (const element of fields) {
+      add(element, "Similar input name found")
+    }
+  }
+
+  const wantedTestId = attributeLiteral(failedSelector, "data-testid")
+  if (wantedTestId && !full()) {
+    const tagged = byAttributeValue(page, wantedTestId, "[data-testid]", attributeOf("data-testid"))
+    for (const element of tagged) {
+      add(element, "Similar data-testid found")
+    }
+  }
+
   const isButtonSelector = failedSelector.includes("button") || failedSelector.includes("btn")
   if ((isButtonSelector || hint) && !full()) {
     const controls = scan(
@@ -107,6 +174,21 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
       const text = (element.textContent ?? "").trim()
       if (hint && text.toLowerCase().includes(hint)) {
         add(element, `Link: "${text.slice(0, reasonTextLimit)}"`)
+      }
+    }
+  }
+
+  if (hint && !full()) {
+    const labels = labelTexts(page)
+    for (const element of scan(page, fieldSelector)) {
+      const described = [
+        labels.get(element.id) ?? "",
+        element.getAttribute("placeholder") ?? "",
+        element.getAttribute("aria-label") ?? "",
+      ]
+      if (described.some((value) => value.toLowerCase().includes(hint))) {
+        const name = described.find((value) => value !== "") ?? ""
+        add(element, `Input: "${name.slice(0, reasonTextLimit)}"`)
       }
     }
   }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 
 import type { Page } from "../src/content/page"
+import { getElementInfo } from "../src/content/read"
 import { buildElementNotFoundError, findSelectorAlternatives } from "../src/content/suggest"
 import { assertResolves, fakePage, stubLocation, stubTop } from "./dom"
 import errors from "./fixtures/errors.json"
@@ -171,5 +172,136 @@ describe("buildElementNotFoundError", () => {
     expect(message).toContain(`\n\n${errors.notFoundSuggestions}\n`)
     expect(message).toContain(`\n\n${errors.notFoundContext}\n`)
     expect(message.endsWith(`\n\n${errors.notFoundHint}`)).toBe(true)
+  })
+})
+
+describe("form-aware alternatives", () => {
+  const FORM_HTML =
+    '<form><label for="email-field">Email address</label>' +
+    '<input id="email-field" name="email" placeholder="you@example.com">' +
+    '<input id="phone-field" name="phone">' +
+    '<textarea id="note-field" name="comment-box"></textarea></form>'
+
+  function formPage(): Page {
+    document.body.innerHTML = FORM_HTML
+    return fakePage()
+  }
+
+  test("suggests an input whose name contains the failed name literal", () => {
+    const page = formPage()
+    expect(findSelectorAlternatives(page, 'input[name="mail"]')).toEqual([
+      { selector: "#email-field", reason: "Similar input name found" },
+    ])
+    assertResolves(page, "#email-field", el("#email-field"))
+  })
+
+  test("drops a trailing index from the name literal when nothing matches", () => {
+    const page = formPage()
+    const expected = [{ selector: "#email-field", reason: "Similar input name found" }]
+    expect(findSelectorAlternatives(page, 'input[name="email-1"]')).toEqual(expected)
+    expect(findSelectorAlternatives(page, "input[name=email-1]")).toEqual(expected)
+    expect(findSelectorAlternatives(page, 'input[name="email_2"]')).toEqual(expected)
+  })
+
+  test("scans textareas and selects for the name too", () => {
+    const page = formPage()
+    expect(findSelectorAlternatives(page, '[name="comment"]')).toEqual([
+      { selector: "#note-field", reason: "Similar input name found" },
+    ])
+  })
+
+  test("adds nothing when no name is close", () => {
+    const page = formPage()
+    expect(findSelectorAlternatives(page, 'input[name="zed"]')).toEqual([])
+    expect(findSelectorAlternatives(page, 'input[name="zed-1"]')).toEqual([])
+  })
+
+  test("stops the name scan at the search cap", () => {
+    document.body.innerHTML =
+      Array.from({ length: 100 }, () => '<input name="zzz">').join("") +
+      '<input id="late-field" name="email">'
+    expect(findSelectorAlternatives(fakePage(), 'input[name="email"]')).toEqual([])
+  })
+
+  test("caps the name suggestions at five", () => {
+    document.body.innerHTML = Array.from(
+      { length: 8 },
+      (_, index) => `<input id="mail-box-${index}" name="email-${index}">`,
+    ).join("")
+    const page = fakePage()
+
+    const alternatives = findSelectorAlternatives(page, 'input[name="email"]')
+
+    expect(alternatives).toHaveLength(5)
+    expect(alternatives.every((item) => item.reason === "Similar input name found")).toBe(true)
+    for (const [index, item] of alternatives.entries()) {
+      assertResolves(page, item.selector, el(`#mail-box-${index}`))
+    }
+  })
+
+  test("suggests elements whose data-testid contains the failed literal", () => {
+    document.body.innerHTML =
+      '<div data-testid="submit-btn-primary">a</div><div data-testid="cancel">b</div>'
+    const page = fakePage()
+
+    expect(findSelectorAlternatives(page, '[data-testid="submit-btn"]')).toEqual([
+      { selector: '[data-testid="submit-btn-primary"]', reason: "Similar data-testid found" },
+    ])
+    assertResolves(page, '[data-testid="submit-btn-primary"]', el("[data-testid]"))
+  })
+
+  test("drops a trailing index from the data-testid literal", () => {
+    document.body.innerHTML = '<div data-testid="submit">a</div>'
+    expect(findSelectorAlternatives(fakePage(), '[data-testid="submit-2"]')).toEqual([
+      { selector: '[data-testid="submit"]', reason: "Similar data-testid found" },
+    ])
+  })
+
+  test("adds nothing when no data-testid is close", () => {
+    document.body.innerHTML = '<div data-testid="submit">a</div>'
+    expect(findSelectorAlternatives(fakePage(), '[data-testid="zzz"]')).toEqual([])
+  })
+
+  test("matches a hint against input labels, placeholders and aria-labels", () => {
+    document.body.innerHTML =
+      '<label for="mail-field">Email address</label><input id="mail-field">' +
+      '<input id="other-field" placeholder="Your email here">' +
+      '<input id="aria-field" aria-label="Email backup">' +
+      '<input id="far-field" placeholder="Phone">'
+    const page = fakePage()
+
+    const alternatives = findSelectorAlternatives(page, '[aria-label="mail"]')
+
+    expect(alternatives).toEqual([
+      { selector: "#mail-field", reason: 'Input: "Email address"' },
+      { selector: "#other-field", reason: 'Input: "Your email here"' },
+      { selector: '[aria-label="Email backup"]', reason: 'Input: "Email backup"' },
+    ])
+    for (const item of alternatives) {
+      assertResolves(page, item.selector, el(item.selector))
+    }
+  })
+
+  test("reaches the new passes through getElementInfo", () => {
+    const extra = '<div data-testid="submit-btn">go</div><input id="x-field" aria-label="Mail">'
+    document.body.innerHTML = FORM_HTML + extra
+    const page = fakePage()
+
+    const messages = [
+      'input[name="email-1"]',
+      '[data-testid="submit-btn-2"]',
+      '[aria-label="ail"]',
+    ].map((selector) => {
+      try {
+        getElementInfo({ selector }, page)
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error)
+      }
+      throw new Error(`expected a miss for ${selector}`)
+    })
+
+    expect(messages[0]).toContain("  - #email-field (Similar input name found)")
+    expect(messages[1]).toContain('  - [data-testid="submit-btn"] (Similar data-testid found)')
+    expect(messages[2]).toContain('  - [aria-label="Mail"] (Input: "Mail")')
   })
 })

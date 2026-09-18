@@ -506,7 +506,10 @@ describe("page commands", () => {
     expect(await failure(port, "type", { selector: "h1", text: "nope", autoWait: false })).toBe(
       errors.elementNotEditable.replace("<selector>", "h1"),
     )
-    expect(await failure(port, "getElementInfo", { selector: "#missing" })).toBe(
+    const infoMiss = await failure(port, "getElementInfo", { selector: "#missing" })
+    expect(infoMiss).toContain(errors.elementNotFound.replace("<selector>", "#missing"))
+    expect(infoMiss).toContain(errors.notFoundContext)
+    expect(await failure(port, "getContent", { selector: "#missing" })).toBe(
       errors.elementNotFound.replace("<selector>", "#missing"),
     )
     expect(await failure(port, "waitFor", { timeout: 50, interval: 10 })).toBe(
