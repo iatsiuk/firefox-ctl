@@ -6,6 +6,7 @@ import type { JsonObject, JsonValue } from "../protocol"
 import { capturedErrors } from "./console"
 import type { Page } from "./page"
 import { safeQuerySelector } from "./selector"
+import { SelectorUnavailable, uniqueSelector } from "./unique-selector"
 import { isRendered } from "./visibility"
 
 const truncationSuffix = "\n\n[... truncated, use selector for specific content]"
@@ -150,8 +151,14 @@ function collectHeadings(page: Page): JsonObject[] {
   return headings
 }
 
-function collectLinks(page: Page): JsonObject[] {
-  const links: JsonObject[] = []
+/** An entry and the element it describes, kept until the slice picks winners. */
+interface Found {
+  entry: JsonObject
+  element: Element
+}
+
+function collectLinks(page: Page): Found[] {
+  const links: Found[] = []
   for (const element of page.document.querySelectorAll("a[href]")) {
     if (!hasBox(element)) {
       continue
@@ -159,16 +166,19 @@ function collectLinks(page: Page): JsonObject[] {
     const text = textOf(element) || element.getAttribute("aria-label") || ""
     if (text) {
       links.push({
-        text: text.slice(0, 50),
-        href: element.getAttribute("href")?.slice(0, 100) ?? null,
+        element,
+        entry: {
+          text: text.slice(0, 50),
+          href: element.getAttribute("href")?.slice(0, 100) ?? null,
+        },
       })
     }
   }
   return links
 }
 
-function collectButtons(page: Page): JsonObject[] {
-  const buttons: JsonObject[] = []
+function collectButtons(page: Page): Found[] {
+  const buttons: Found[] = []
   for (const element of page.document.querySelectorAll(BUTTON_SELECTOR)) {
     if (!hasBox(element)) {
       continue
@@ -176,9 +186,12 @@ function collectButtons(page: Page): JsonObject[] {
     const control = field(element)
     const text = textOf(element) || control.value || element.getAttribute("aria-label") || ""
     buttons.push({
-      text: text.slice(0, 50),
-      disabled: control.disabled === true || element.getAttribute("aria-disabled") === "true",
-      type: control.type || "button",
+      element,
+      entry: {
+        text: text.slice(0, 50),
+        disabled: control.disabled === true || element.getAttribute("aria-disabled") === "true",
+        type: control.type || "button",
+      },
     })
   }
   return buttons
@@ -202,20 +215,23 @@ function labelOf(page: Page, control: FieldLike): string {
   return ""
 }
 
-function collectInputs(page: Page): JsonObject[] {
-  const inputs: JsonObject[] = []
+function collectInputs(page: Page): Found[] {
+  const inputs: Found[] = []
   for (const element of page.document.querySelectorAll("input, textarea, select")) {
     const control = field(element)
     if (control.type === "hidden" || !hasBox(element)) {
       continue
     }
     inputs.push({
-      type: control.type || element.tagName.toLowerCase(),
-      name: control.name || element.id || "",
-      label: labelOf(page, control),
-      value: control.type === "password" ? "***" : (control.value?.slice(0, 50) ?? ""),
-      required: control.required === true,
-      disabled: control.disabled === true,
+      element,
+      entry: {
+        type: control.type || element.tagName.toLowerCase(),
+        name: control.name || element.id || "",
+        label: labelOf(page, control),
+        value: control.type === "password" ? "***" : (control.value?.slice(0, 50) ?? ""),
+        required: control.required === true,
+        disabled: control.disabled === true,
+      },
     })
   }
   return inputs
@@ -244,8 +260,22 @@ function collectLandmarks(page: Page): JsonObject[] {
   return landmarks
 }
 
-function count(items: JsonObject[], max: number): JsonObject {
+function count(items: unknown[], max: number): JsonObject {
   return { shown: Math.min(items.length, max), total: items.length }
+}
+
+// the slice runs first: a dropped entry never costs a selector query
+function described(page: Page, found: Found[], max: number): JsonObject[] {
+  return found.slice(0, max).map(({ entry, element }) => {
+    try {
+      return { ...entry, selector: uniqueSelector(page, element) }
+    } catch (error) {
+      if (error instanceof SelectorUnavailable) {
+        return { ...entry, selector: null }
+      }
+      throw error
+    }
+  })
 }
 
 export function getPageState(params: JsonObject, page: Page): JsonValue {
@@ -275,9 +305,9 @@ export function getPageState(params: JsonObject, page: Page): JsonValue {
     // only what console capture has seen; empty until the first getConsoleLogs
     errors: capturedErrors(),
     headings: headings.slice(0, maxHeadings),
-    links: links.slice(0, maxLinks),
-    buttons: buttons.slice(0, maxButtons),
-    inputs: inputs.slice(0, maxInputs),
+    links: described(page, links, maxLinks),
+    buttons: described(page, buttons, maxButtons),
+    inputs: described(page, inputs, maxInputs),
     images: images.slice(0, maxImages),
     landmarks,
     counts: {

@@ -8,7 +8,16 @@ import {
   getPageState,
 } from "../src/content/read"
 import type { JsonValue } from "../src/protocol"
-import { fakePage, stubLocation, stubRect, stubScroll, stubStyle, stubViewport } from "./dom"
+import {
+  assertResolves,
+  fakePage,
+  seamPage,
+  stubLocation,
+  stubRect,
+  stubScroll,
+  stubStyle,
+  stubViewport,
+} from "./dom"
 import errors from "./fixtures/errors.json"
 import a11yFixture from "./fixtures/results/getAccessibilitySnapshot.json"
 import contentFixture from "./fixtures/results/getContent.json"
@@ -194,6 +203,99 @@ describe("getPageState", () => {
     showAll()
     const state = getPageState({}, fakePage()) as { inputs: { label: string }[] }
     expect(state.inputs.map((input) => input.label)).toEqual([""])
+  })
+
+  test("gives every link, button and input a selector that resolves to its element", () => {
+    document.body.innerHTML =
+      '<nav><a href="/a">A</a><a href="/b">B</a></nav>' +
+      '<form><button>Go</button><button aria-label="Close">x</button>' +
+      '<input name="user"><textarea name="bio"></textarea></form>'
+    showAll()
+    const page = fakePage()
+    const state = getPageState({}, page) as Record<string, { selector: unknown }[]>
+
+    const groups = [
+      { group: "links", locators: ['a[href="/a"]', 'a[href="/b"]'] },
+      { group: "buttons", locators: ["form button:nth-of-type(1)", "form button:nth-of-type(2)"] },
+      { group: "inputs", locators: ["input", "textarea"] },
+    ]
+    for (const { group, locators } of groups) {
+      const entries = state[group] ?? []
+      expect(entries).toHaveLength(locators.length)
+      locators.forEach((locator, index) => {
+        const selector = entries[index]?.selector
+        expect(typeof selector).toBe("string")
+        // identity, not text or href: the selector must find the very element
+        assertResolves(page, selector as string, el(locator))
+      })
+    }
+  })
+
+  test("separates two buttons that share their text by their path", () => {
+    document.body.innerHTML = "<div><button>Go</button><button>Go</button></div>"
+    showAll()
+    const page = fakePage()
+    const state = getPageState({}, page) as { buttons: { selector: string }[] }
+    const [first, second] = state.buttons
+    expect(first?.selector).not.toBe(second?.selector)
+    assertResolves(page, first?.selector ?? "", el("button:nth-of-type(1)"))
+    assertResolves(page, second?.selector ?? "", el("button:nth-of-type(2)"))
+  })
+
+  test("leaves headings, images and landmarks untouched", () => {
+    const state = getPageState({}, fixturePage()) as Record<string, unknown>
+    expect(state.headings).toEqual(pageStateFixture.headings)
+    expect(state.images).toEqual(pageStateFixture.images)
+    expect(state.landmarks).toEqual(pageStateFixture.landmarks)
+  })
+
+  test("keeps the totals while the slice limits how many selectors are returned", () => {
+    const cases = [
+      { group: "links", limit: "maxLinks", html: '<a href="/1" id="k">1</a>' },
+      { group: "buttons", limit: "maxButtons", html: '<button id="k">1</button>' },
+      { group: "inputs", limit: "maxInputs", html: '<input id="k">' },
+    ]
+    for (const { group, limit, html } of cases) {
+      document.body.innerHTML = html + html.replace(/id="k"/g, "") + html.replace(/id="k"/g, "")
+      showAll()
+      const page = fakePage()
+
+      const one = getPageState({ [limit]: 1 }, page) as Record<string, unknown>
+      const shown = one[group] as { selector: string }[]
+      expect(shown).toHaveLength(1)
+      assertResolves(page, shown[0]?.selector ?? "", el("#k"))
+      expect((one.counts as Record<string, unknown>)[group]).toEqual({ shown: 1, total: 3 })
+
+      const none = getPageState({ [limit]: 0 }, page) as Record<string, unknown>
+      expect(none[group]).toEqual([])
+      expect((none.counts as Record<string, unknown>)[group]).toEqual({ shown: 0, total: 3 })
+    }
+  })
+
+  test("generates selectors for the returned slice only", () => {
+    document.body.innerHTML =
+      '<a href="/1" id="keep-link">1</a><a href="/2" id="drop-alpha">2</a>' +
+      '<button id="keep-button">1</button><button id="drop-beta">2</button>' +
+      '<input id="keep-input"><input id="drop-gamma">'
+    showAll()
+    const page = seamPage(fakePage())
+    getPageState({ maxLinks: 1, maxButtons: 1, maxInputs: 1 }, page)
+
+    for (const dropped of ["drop-alpha", "drop-beta", "drop-gamma"]) {
+      expect(page.queries.filter((query) => query.includes(dropped))).toEqual([])
+    }
+    expect(page.queries).toContain("#keep-link")
+  })
+
+  test("reports a null selector for an element it cannot describe", () => {
+    document.body.innerHTML = '<button id="solo">Go</button>'
+    showAll()
+    // every candidate query comes back empty, so no candidate ever verifies
+    const page = seamPage(fakePage(), (selector) =>
+      selector.startsWith("#") || selector.startsWith("body") ? [] : undefined,
+    )
+    const state = getPageState({}, page) as { buttons: JsonValue[] }
+    expect(state.buttons).toEqual([{ text: "Go", disabled: false, type: "submit", selector: null }])
   })
 
   test("skips hidden inputs, invisible links and small images", () => {

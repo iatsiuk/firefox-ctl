@@ -4,8 +4,15 @@
   "viewport": { "width": 1200, "height": 800, "scrollX": 0, "scrollY": 0, "scrollHeight": 2000 },
   "errors": [],
   "headings": [{ "level": "h1", "text": "Fixture page" }],
-  "links": [{ "text": "Docs", "href": "/docs" }],
-  "buttons": [{ "text": "Send", "disabled": true, "type": "submit" }],
+  "links": [{ "text": "Docs", "href": "/docs", "selector": "body > nav > a:nth-of-type(1)" }],
+  "buttons": [
+    {
+      "text": "Send",
+      "disabled": true,
+      "type": "submit",
+      "selector": "body > main > form > button"
+    }
+  ],
   "inputs": [
     {
       "type": "text",
@@ -13,7 +20,8 @@
       "label": "User",
       "value": "ada",
       "required": true,
-      "disabled": false
+      "disabled": false,
+      "selector": "#user"
     },
     {
       "type": "password",
@@ -21,7 +29,8 @@
       "label": "",
       "value": "***",
       "required": false,
-      "disabled": false
+      "disabled": false,
+      "selector": "#pass"
     }
   ],
   "images": [{ "alt": "Logo", "src": "/logo.png" }],
