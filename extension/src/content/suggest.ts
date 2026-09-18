@@ -64,13 +64,20 @@ function attributeOf(name: string): (element: Element) => string {
   return (element) => element.getAttribute(name) ?? ""
 }
 
-/** The text of every `label[for]`, keyed by the id the label points at. */
-function labelTexts(page: Page): Map<string, string> {
-  const texts = new Map<string, string>()
+/** The text of every `label[for]`, keyed by the id the label points at; an id can have more than one label. */
+function labelTexts(page: Page): Map<string, string[]> {
+  const texts = new Map<string, string[]>()
   for (const label of scan(page, "label[for]")) {
     const target = label.getAttribute("for") ?? ""
-    if (target && !texts.has(target)) {
-      texts.set(target, (label.textContent ?? "").trim())
+    if (!target) {
+      continue
+    }
+    const text = (label.textContent ?? "").trim()
+    const existing = texts.get(target)
+    if (existing) {
+      existing.push(text)
+    } else {
+      texts.set(target, [text])
     }
   }
   return texts
@@ -182,7 +189,7 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
     const labels = labelTexts(page)
     for (const element of scan(page, fieldSelector)) {
       const described = [
-        labels.get(element.id) ?? "",
+        ...(labels.get(element.id) ?? []),
         element.getAttribute("placeholder") ?? "",
         element.getAttribute("aria-label") ?? "",
       ]

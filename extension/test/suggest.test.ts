@@ -292,6 +292,17 @@ describe("form-aware alternatives", () => {
     expect(alternatives).toEqual([{ selector: "#mixed-field", reason: 'Input: "Your mail here"' }])
   })
 
+  test("matches a hint against a second label sharing the same for target", () => {
+    document.body.innerHTML =
+      '<label for="dual-field">Account</label><label for="dual-field">Email address</label>' +
+      '<input id="dual-field">'
+    const page = fakePage()
+
+    const alternatives = findSelectorAlternatives(page, '[aria-label="mail"]')
+
+    expect(alternatives).toEqual([{ selector: "#dual-field", reason: 'Input: "Email address"' }])
+  })
+
   test("reaches the new passes through getElementInfo", () => {
     const extra = '<div data-testid="submit-btn">go</div><input id="x-field" aria-label="Mail">'
     document.body.innerHTML = FORM_HTML + extra
