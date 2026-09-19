@@ -10,6 +10,7 @@ import {
 import type { JsonValue } from "../src/protocol"
 import {
   assertResolves,
+  type FakePage,
   fakePage,
   seamPage,
   stubLocation,
@@ -93,6 +94,13 @@ function fixturePage(): Page {
     configurable: true,
     value: 2000,
   })
+  return fakePage()
+}
+
+/** A page whose body is `html`, every element boxed, for the text searches. */
+function textPage(html: string): FakePage {
+  document.body.innerHTML = html
+  showAll()
   return fakePage()
 }
 
@@ -208,6 +216,106 @@ describe("getElementInfo", () => {
     el("#intro").textContent = "x".repeat(600)
     const info = getElementInfo({ selector: "#intro" }, page) as { text: string }
     expect(info.text.length).toBe(500)
+  })
+})
+
+describe("getElementInfo by text", () => {
+  test("answers the element rendering the text with a verified selector", () => {
+    const page = fixturePage()
+
+    expect(getElementInfo({ text: "Hello world" }, page)).toEqual({
+      ...elementInfoFixture,
+      matchedBy: "text",
+    })
+    assertResolves(page, "#intro", el("#intro"))
+  })
+
+  test("picks the deepest element rendering the text", () => {
+    const page = textPage('<div id="row"><p id="cell"><b id="total">Total</b></p></div>')
+
+    expect(getElementInfo({ text: "Total" }, page)).toMatchObject({
+      selector: "#total",
+      tagName: "b",
+      matchedBy: "text",
+    })
+  })
+
+  test("refuses to guess between two deep matches", () => {
+    const page = textPage('<b id="a">Total</b> and <b id="b">Total</b>')
+
+    expect(messageOf(() => getElementInfo({ text: "Total" }, page))).toBe(
+      errors.ambiguousText.replace("Apply", "Total"),
+    )
+  })
+
+  test("names a candidate the generator cannot describe", () => {
+    const base = textPage('<b id="a">Total</b> and <b class="ghost">Total</b>')
+    // every query but the verified `#a` answers two elements, so nothing
+    // describes the second `b` uniquely
+    const page = seamPage(base, (selector) =>
+      selector === "#a" ? undefined : [el("#a"), el(".ghost")],
+    )
+
+    expect(messageOf(() => getElementInfo({ text: "Total" }, page))).toBe(
+      'AMBIGUOUS_TEXT: "Total" matches 2 elements: #a, <b (no unique selector)>',
+    )
+  })
+
+  test("narrows the search to the scope", () => {
+    const page = textPage('<div id="dialog"><b id="in">Total</b></div><b id="out">Total</b>')
+
+    expect(getElementInfo({ text: "Total", scope: "#dialog" }, page)).toMatchObject({
+      selector: "#in",
+    })
+  })
+
+  test("keeps the scope errors", () => {
+    const page = textPage('<b id="a">Total</b><div class="box"></div><div class="box"></div>')
+
+    expect(() => getElementInfo({ text: "Total", scope: "#none" }, page)).toThrow(
+      errors.scopeNotFound.replace("<scope>", "#none"),
+    )
+    expect(() => getElementInfo({ text: "Total", scope: ".box" }, page)).toThrow(
+      errors.scopeAmbiguous.replace("<scope>", ".box").replace("<n>", "2"),
+    )
+    expect(() => getElementInfo({ text: "Total", scope: "   " }, page)).toThrow(errors.scopeEmpty)
+    expect(() => getElementInfo({ scope: "#a" }, page)).toThrow(errors.scopeRequiresText)
+  })
+
+  test("reports a miss with the text diagnostics and never waits", () => {
+    const page = textPage('<button id="near">Total amount</button>')
+
+    const message = messageOf(() => getElementInfo({ text: "Total" }, page))
+
+    expect(message).toContain(errors.elementNotFoundText.replace("<text>", "Total"))
+    expect(message).toContain(errors.notFoundSuggestions)
+    expect(message).toContain('#near (Button: "Total amount")')
+    expect(message).toContain(errors.notFoundContext)
+    // no auto-wait here: the answer is synchronous and nothing was scheduled
+    expect(page.now()).toBe(0)
+    expect(page.pending()).toBe(0)
+  })
+
+  test("answers a null selector when the generator cannot describe the element", () => {
+    const base = textPage('<b class="ghost">Total</b>')
+    const page = seamPage(base, () => [el(".ghost"), document.body])
+
+    expect(getElementInfo({ text: "Total" }, page)).toMatchObject({
+      selector: null,
+      tagName: "b",
+      matchedBy: "text",
+    })
+  })
+
+  test("refuses selector and text together and validates the text", () => {
+    const page = textPage('<b id="a">Total</b>')
+
+    expect(() => getElementInfo({ selector: "#a", text: "Total" }, page)).toThrow(
+      errors.targetExclusive,
+    )
+    expect(() => getElementInfo({ text: 5 }, page)).toThrow(errors.textNotString)
+    expect(() => getElementInfo({ text: "   " }, page)).toThrow(errors.textEmpty)
+    expect(() => getElementInfo({ text: "x".repeat(501) }, page)).toThrow(errors.textTooLong)
   })
 })
 

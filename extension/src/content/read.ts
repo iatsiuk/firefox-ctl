@@ -6,7 +6,8 @@ import type { JsonObject, JsonValue } from "../protocol"
 import { capturedErrors } from "./console"
 import type { Page } from "./page"
 import { safeQuerySelector } from "./selector"
-import { buildElementNotFoundError } from "./suggest"
+import { buildElementNotFoundError, buildTextNotFoundError } from "./suggest"
+import { ambiguousText, describeTarget, findByText, resolveTarget, scopeRoot } from "./text-target"
 import { SelectorUnavailable, uniqueSelector } from "./unique-selector"
 import { isRendered } from "./visibility"
 
@@ -103,12 +104,25 @@ export function getContent(params: JsonObject, page: Page): JsonValue {
   return result
 }
 
-export function getElementInfo(params: JsonObject, page: Page): JsonValue {
-  // unlike getContent, a miss here reports near-miss selectors and page context
-  const element = safeQuerySelector(page, params.selector)
-  if (!element) {
-    throw buildElementNotFoundError(page, String(params.selector), "getElementInfo")
+/** The one element rendering `text`; ambiguity refuses rather than guesses. */
+function textElement(page: Page, text: string, scope: string | null): Element {
+  const matches = findByText(page, text, scopeRoot(page, scope), "deepest")
+  if (matches.length > 1) {
+    throw ambiguousText(page, text, matches)
   }
+  const element = matches[0]
+  if (element === undefined) {
+    throw buildTextNotFoundError(page, text)
+  }
+  return element
+}
+
+function elementInfo(
+  page: Page,
+  element: Element,
+  selector: JsonValue | null,
+  matchedBy: string,
+): JsonValue {
   const rect = element.getBoundingClientRect()
   const styles = page.window.getComputedStyle(element)
 
@@ -118,7 +132,7 @@ export function getElementInfo(params: JsonObject, page: Page): JsonValue {
   }
 
   return {
-    selector: params.selector ?? null,
+    selector,
     tagName: element.tagName.toLowerCase(),
     attributes,
     text: textOf(element).slice(0, ELEMENT_TEXT_LIMIT),
@@ -136,7 +150,23 @@ export function getElementInfo(params: JsonObject, page: Page): JsonValue {
       backgroundColor: styles.backgroundColor,
       fontSize: styles.fontSize,
     },
+    matchedBy,
   }
+}
+
+export function getElementInfo(params: JsonObject, page: Page): JsonValue {
+  const target = resolveTarget(page, params)
+  if (target.mode === "text") {
+    // one probe only: unlike click, reading never auto-waits
+    const element = textElement(page, target.text, target.scope)
+    return elementInfo(page, element, describeTarget(page, element), "text")
+  }
+  // unlike getContent, a miss here reports near-miss selectors and page context
+  const element = safeQuerySelector(page, params.selector)
+  if (!element) {
+    throw buildElementNotFoundError(page, String(params.selector), "getElementInfo")
+  }
+  return elementInfo(page, element, params.selector ?? null, "selector")
 }
 
 const BUTTON_SELECTOR = 'button, [role="button"], input[type="submit"], input[type="button"]'

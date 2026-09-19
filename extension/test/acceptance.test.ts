@@ -529,6 +529,20 @@ describe("page commands", () => {
     expect(clicks).toBe(1)
   })
 
+  test("getElementInfo by text answers the heading", async () => {
+    const browser = userBrowser()
+    const { port } = session(browser)
+    contentTab(browser)
+    result(await run(port, "createWindow", { private: false }))
+
+    expect(result(await run(port, "getElementInfo", { text: "Hello world" }))).toMatchObject({
+      selector: "#title",
+      tagName: "h1",
+      text: "Hello world",
+      matchedBy: "text",
+    })
+  })
+
   test("a refused action keeps the content script's message and diagnostics", async () => {
     const browser = userBrowser()
     const { port } = session(browser)

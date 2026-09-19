@@ -6,10 +6,14 @@
 import type { JsonObject, JsonValue } from "../protocol"
 import type { Page } from "./page"
 import { validateSelector } from "./selector"
+import { SelectorUnavailable, uniqueSelector } from "./unique-selector"
 import { isRendered } from "./visibility"
 
 /** The longest text query accepted, measured on the raw value. */
 export const TEXT_LIMIT = 500
+
+/** Candidates named in an `AMBIGUOUS_TEXT` message before the count takes over. */
+const AMBIGUOUS_LIMIT = 5
 
 /** What `click` may press: the nearest one of these wins a text match. */
 export const ACTIONABLE =
@@ -181,4 +185,31 @@ export function scopeRoot(page: Page, scope: string | null): Element {
     throw new Error(`Scope is ambiguous: ${scope} matches ${found.length} elements`)
   }
   return root
+}
+
+/** A verified selector for the element, or `null` when nothing describes it. */
+export function describeTarget(page: Page, element: Element): string | null {
+  try {
+    return uniqueSelector(page, element)
+  } catch (error) {
+    if (error instanceof SelectorUnavailable) {
+      return null
+    }
+    throw error
+  }
+}
+
+/** How a candidate is named in the ambiguity message. */
+function nameCandidate(page: Page, element: Element): string {
+  return describeTarget(page, element) ?? `<${element.tagName.toLowerCase()} (no unique selector)>`
+}
+
+/** The refusal both text actions raise rather than guessing between matches. */
+export function ambiguousText(page: Page, text: string, matches: Element[]): Error {
+  const shown = matches.slice(0, AMBIGUOUS_LIMIT).map((match) => nameCandidate(page, match))
+  const rest = matches.length - shown.length
+  const list = rest > 0 ? [...shown, `and ${rest} more`] : shown
+  return new Error(
+    `AMBIGUOUS_TEXT: "${text}" matches ${matches.length} elements: ${list.join(", ")}`,
+  )
 }

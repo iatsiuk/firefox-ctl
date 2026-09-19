@@ -11,14 +11,10 @@ import {
   validateSelector,
 } from "./selector"
 import { buildElementNotFoundError, buildTextNotFoundError } from "./suggest"
-import { findByText, resolveTarget, scopeRoot } from "./text-target"
+import { ambiguousText, describeTarget, findByText, resolveTarget, scopeRoot } from "./text-target"
 import { nextFrame } from "./timing"
-import { SelectorUnavailable, uniqueSelector } from "./unique-selector"
 
 const CLICK_TEXT_LIMIT = 100
-
-/** Candidates named in an `AMBIGUOUS_TEXT` message before the count takes over. */
-const AMBIGUOUS_LIMIT = 5
 
 /** The `code` map; anything else keeps the key name or becomes `Key<X>`. */
 const keyCodes: Record<string, string> = {
@@ -81,32 +77,6 @@ async function requireElement(
     throw buildElementNotFoundError(page, selector, operation)
   }
   return { selector, element: element as HTMLElement }
-}
-
-/** A verified selector for the element, or `null` when nothing describes it. */
-function describeTarget(page: Page, element: Element): string | null {
-  try {
-    return uniqueSelector(page, element)
-  } catch (error) {
-    if (error instanceof SelectorUnavailable) {
-      return null
-    }
-    throw error
-  }
-}
-
-/** How a candidate is named in the ambiguity message. */
-function nameCandidate(page: Page, element: Element): string {
-  return describeTarget(page, element) ?? `<${element.tagName.toLowerCase()} (no unique selector)>`
-}
-
-function ambiguousText(page: Page, text: string, matches: Element[]): Error {
-  const shown = matches.slice(0, AMBIGUOUS_LIMIT).map((match) => nameCandidate(page, match))
-  const rest = matches.length - shown.length
-  const list = rest > 0 ? [...shown, `and ${rest} more`] : shown
-  return new Error(
-    `AMBIGUOUS_TEXT: "${text}" matches ${matches.length} elements: ${list.join(", ")}`,
-  )
 }
 
 /**
