@@ -66,6 +66,7 @@ var Commands = []Spec{
 		Flag{Name: "selector", Kind: KindString, Usage: "css selector to extract"},
 		Flag{Name: "includeHtml", Kind: KindBool, Usage: "include html alongside text"},
 		Flag{Name: "maxLength", Kind: KindInt, Default: 50000, Usage: "maximum characters returned"},
+		Flag{Name: "tail", Kind: KindInt, Usage: "return only the last N characters, instead of --maxLength"},
 	)},
 	{Name: "click", Flags: page(
 		Flag{Name: "selector", Kind: KindString, Usage: "css selector to click"},

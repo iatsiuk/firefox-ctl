@@ -57,6 +57,7 @@
       { "name": "selector", "kind": "string" },
       { "name": "includeHtml", "kind": "bool" },
       { "name": "maxLength", "kind": "int", "default": 50000 },
+      { "name": "tail", "kind": "int" },
       { "name": "tabId", "kind": "int" },
       { "name": "windowId", "kind": "int" }
     ]

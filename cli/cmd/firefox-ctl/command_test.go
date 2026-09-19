@@ -99,6 +99,11 @@ func TestFlagKindsReachParams(t *testing.T) {
 			want: map[string]any{"selector": "#main", "maxLength": 120},
 		},
 		{
+			name: "tail",
+			args: []string{"getContent", "--selector", "#log", "--tail", "1500"},
+			want: map[string]any{"selector": "#log", "tail": 1500},
+		},
+		{
 			name: "float and bool",
 			args: []string{"screenshot", "--scale", "0.25", "--annotate"},
 			want: map[string]any{"scale": 0.25, "annotate": true},
