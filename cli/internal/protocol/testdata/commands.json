@@ -68,6 +68,8 @@
     "name": "click",
     "flags": [
       { "name": "selector", "kind": "string" },
+      { "name": "text", "kind": "string" },
+      { "name": "scope", "kind": "string" },
       { "name": "autoWait", "kind": "bool", "default": true },
       { "name": "waitTimeout", "kind": "int" },
       { "name": "tabId", "kind": "int" },
@@ -171,6 +173,8 @@
     "name": "getElementInfo",
     "flags": [
       { "name": "selector", "kind": "string" },
+      { "name": "text", "kind": "string" },
+      { "name": "scope", "kind": "string" },
       { "name": "tabId", "kind": "int" },
       { "name": "windowId", "kind": "int" }
     ]

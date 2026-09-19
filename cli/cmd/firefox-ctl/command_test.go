@@ -113,6 +113,16 @@ func TestFlagKindsReachParams(t *testing.T) {
 			args: []string{"ping"},
 			want: map[string]any{},
 		},
+		{
+			name: "click by text with scope",
+			args: []string{"click", "--tabId", "3", "--text", "Apply", "--scope", "main"},
+			want: map[string]any{"tabId": 3, "text": "Apply", "scope": "main"},
+		},
+		{
+			name: "getElementInfo by text with scope",
+			args: []string{"getElementInfo", "--text", "Apply", "--scope", "#dialog"},
+			want: map[string]any{"text": "Apply", "scope": "#dialog"},
+		},
 	}
 
 	for _, tt := range tests {

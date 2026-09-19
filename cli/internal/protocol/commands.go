@@ -69,6 +69,8 @@ var Commands = []Spec{
 	)},
 	{Name: "click", Flags: page(
 		Flag{Name: "selector", Kind: KindString, Usage: "css selector to click"},
+		Flag{Name: "text", Kind: KindString, Usage: "exact visible text of the element, alternative to --selector"},
+		Flag{Name: "scope", Kind: KindString, Usage: "css selector of the element to search inside, only with --text"},
 		Flag{Name: "autoWait", Kind: KindBool, Default: true, Usage: "wait for the element to appear"},
 		Flag{Name: "waitTimeout", Kind: KindInt, Usage: "auto-wait timeout in ms"},
 	)},
@@ -127,6 +129,8 @@ var Commands = []Spec{
 	)},
 	{Name: "getElementInfo", Flags: page(
 		Flag{Name: "selector", Kind: KindString, Usage: "css selector to inspect"},
+		Flag{Name: "text", Kind: KindString, Usage: "exact visible text of the element, alternative to --selector"},
+		Flag{Name: "scope", Kind: KindString, Usage: "css selector of the element to search inside, only with --text"},
 	)},
 	{Name: "evaluate", Flags: page(
 		Flag{Name: "expression", Kind: KindString, Usage: "javascript expression to run in the page"},
