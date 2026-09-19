@@ -117,19 +117,20 @@
 
     <script>
       // #log carries exactly 3000 characters with no leading or trailing
-      // whitespace: whole numbered lines first, the remainder padded with
-      // dashes, so `--tail 200` must report exactly 2800 dropped characters
+      // whitespace: numbered lines end to end, the last one truncated to
+      // land on the budget exactly, so `--tail 200` must report exactly
+      // 2800 dropped characters and end with that last numbered line
       const logLines = []
       let logLength = 0
-      for (let n = 1; ; n += 1) {
-        const line = `${String(n).padStart(4, "0")} log line with filler`
-        const cost = line.length + (logLength === 0 ? 0 : 1)
-        if (logLength + cost > 3000) break
-        logLength += cost
+      for (let n = 1; logLength < 3000; n += 1) {
+        const prefix = `${String(n).padStart(4, "0")} log line with filler`
+        const separator = logLines.length === 0 ? 0 : 1
+        const remaining = 3000 - logLength - separator
+        const line = prefix.length <= remaining ? prefix : prefix.slice(0, remaining)
+        logLength += separator + line.length
         logLines.push(line)
       }
-      const logText = logLines.join("\n")
-      document.getElementById("log").textContent = logText + "-".repeat(3000 - logText.length)
+      document.getElementById("log").textContent = logLines.join("\n")
 
       // the handler hides the button, so a `text` read after the click would
       // answer "": the result must still say `Apply now`
