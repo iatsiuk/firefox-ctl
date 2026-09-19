@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, test } from "bun:test"
 
 import type { Page } from "../src/content/page"
 import { getElementInfo } from "../src/content/read"
-import { buildElementNotFoundError, findSelectorAlternatives } from "../src/content/suggest"
+import {
+  buildElementNotFoundError,
+  buildTextNotFoundError,
+  findSelectorAlternatives,
+} from "../src/content/suggest"
 import { assertResolves, fakePage, stubLocation, stubTop } from "./dom"
 import errors from "./fixtures/errors.json"
 
@@ -172,6 +176,141 @@ describe("buildElementNotFoundError", () => {
     expect(message).toContain(`\n\n${errors.notFoundSuggestions}\n`)
     expect(message).toContain(`\n\n${errors.notFoundContext}\n`)
     expect(message.endsWith(`\n\n${errors.notFoundHint}`)).toBe(true)
+  })
+})
+
+describe("buildTextNotFoundError", () => {
+  function context(page: Page): void {
+    stubLocation(page.window, "https://example.com/app")
+    page.document.title = "Example app"
+  }
+
+  function textPage(html: string): Page {
+    document.body.innerHTML = html
+    const page = fakePage()
+    context(page)
+    stubTop(page.window, true)
+    return page
+  }
+
+  test("lists controls and links matching the text, page context and the hint", () => {
+    const page = textPage(
+      '<button id="save">Save draft</button>' +
+        '<button id="drop">Delete</button>' +
+        '<div role="button" class="ghost" aria-label="Save everything">Store</div>' +
+        '<a href="/save" id="savelink">Save link</a>' +
+        '<a href="/x" id="x">Other</a>',
+    )
+
+    const error = buildTextNotFoundError(page, "Save")
+
+    expect(error).toBeInstanceOf(Error)
+    expect(error.message).toBe(
+      [
+        'Element not found: text "Save"',
+        "",
+        "Suggested alternatives:",
+        '  - #save (Button: "Save draft")',
+        '  - [aria-label="Save everything"] (Button: "Store")',
+        '  - #savelink (Link: "Save link")',
+        "",
+        "Page context:",
+        "  URL: https://example.com/app",
+        "  Title: Example app",
+        "",
+        "Hint: Use getPageState to see available elements.",
+      ].join("\n"),
+    )
+    assertResolves(page, "#save", el("#save"))
+    assertResolves(page, '[aria-label="Save everything"]', el(".ghost"))
+    assertResolves(page, "#savelink", el("#savelink"))
+  })
+
+  test("matches case-insensitively on a substring of the control text", () => {
+    const page = textPage('<button id="apply">Apply changes</button>')
+
+    expect(buildTextNotFoundError(page, "apply").message).toContain(
+      '  - #apply (Button: "Apply changes")',
+    )
+  })
+
+  test("uses the pinned first line and blocks", () => {
+    const page = textPage('<button id="save">Save draft</button>')
+
+    const message = buildTextNotFoundError(page, "Save").message
+
+    expect(message.startsWith(errors.elementNotFoundText.replace("<text>", "Save"))).toBe(true)
+    expect(message).toContain(`\n\n${errors.notFoundSuggestions}\n`)
+    expect(message).toContain(`\n\n${errors.notFoundContext}\n`)
+    expect(message.endsWith(`\n\n${errors.notFoundHint}`)).toBe(true)
+  })
+
+  test("warns when the content script runs inside an iframe", () => {
+    document.body.innerHTML = ""
+    const page = fakePage()
+    context(page)
+    stubTop(page.window, false)
+
+    const lines = buildTextNotFoundError(page, "Save").message.split("\n")
+
+    expect(lines).toContain(errors.notFoundIframe)
+    expect(lines.indexOf(errors.notFoundIframe)).toBe(lines.indexOf("  Title: Example app") + 1)
+  })
+
+  test("matches the text literally and never runs the id or class passes", () => {
+    const query = 'Save "draft" #1 (v2.0)\\x'
+    const page = textPage(
+      `<button id="literal">${query} now</button>` +
+        '<div id="1">numbered</div>' +
+        '<div class="0">classy</div>' +
+        '<button id="v2">v2.0</button>',
+    )
+
+    const error = buildTextNotFoundError(page, query)
+
+    expect(error.message.split("\n").slice(0, 4)).toEqual([
+      `Element not found: text "${query}"`,
+      "",
+      "Suggested alternatives:",
+      `  - #literal (Button: "${query} now")`,
+    ])
+    expect(error.message).not.toContain("Similar ID found")
+    expect(error.message).not.toContain("Similar class found")
+    expect(error.message).not.toContain("#v2")
+  })
+
+  test("omits the suggestion block when no control matches", () => {
+    const page = textPage("<p>Save</p><div>Save</div>")
+
+    const error = buildTextNotFoundError(page, "Save")
+
+    expect(error.message).toBe(
+      [
+        'Element not found: text "Save"',
+        "",
+        "Page context:",
+        "  URL: https://example.com/app",
+        "  Title: Example app",
+        "",
+        "Hint: Use getPageState to see available elements.",
+      ].join("\n"),
+    )
+    expect(error.message).not.toContain(errors.notFoundSuggestions)
+  })
+
+  test("caps the alternatives at five", () => {
+    const page = textPage(
+      Array.from({ length: 8 }, (_, index) => `<button id="go-${index}">Go ${index}</button>`).join(
+        "",
+      ),
+    )
+
+    const suggested = buildTextNotFoundError(page, "Go")
+      .message.split("\n")
+      .filter((line) => line.startsWith("  - "))
+
+    expect(suggested).toHaveLength(5)
+    expect(new Set(suggested).size).toBe(5)
   })
 })
 

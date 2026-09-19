@@ -1,7 +1,7 @@
-// Diagnostics for a selector that matched nothing: near-miss candidates for
-// the failed selector and the multi-line error the interaction actions throw,
-// with search caps and reason wording. Every suggested selector comes from the
-// shared generator, so it is verified before it is offered.
+// Diagnostics for a target that matched nothing: near-miss candidates for the
+// failed selector or text and the multi-line error the interaction actions
+// throw, with search caps and reason wording. Every suggested selector comes
+// from the shared generator, so it is verified before it is offered.
 
 import type { Page } from "./page"
 import { classTokens, uniqueSelector } from "./unique-selector"
@@ -92,32 +92,78 @@ function textHint(failedSelector: string): string {
   return aria?.[1] ?? ""
 }
 
+const controlSelector = 'button, [role="button"], input[type="submit"], input[type="button"]'
+
+interface Collector {
+  readonly list: Alternative[]
+  add(element: Element, reason: string): void
+  full(): boolean
+}
+
+/** Collects verified, deduplicated suggestions up to the cap. */
+function collector(page: Page): Collector {
+  const list: Alternative[] = []
+  const seen = new Set<string>()
+  return {
+    list,
+    add(element: Element, reason: string): void {
+      if (list.length >= maxAlternatives) {
+        return
+      }
+      let selector: string
+      try {
+        selector = uniqueSelector(page, element)
+      } catch {
+        // nothing describes this element uniquely: suggesting it would mislead
+        return
+      }
+      if (seen.has(selector)) {
+        return
+      }
+      seen.add(selector)
+      list.push({ selector, reason })
+    },
+    full(): boolean {
+      return list.length >= maxAlternatives
+    },
+  }
+}
+
+/** Controls whose text or `aria-label` contains the hint; `anyWithText` takes every labelled one. */
+function buttonPass(page: Page, into: Collector, hint: string, anyWithText: boolean): void {
+  if ((hint === "" && !anyWithText) || into.full()) {
+    return
+  }
+  for (const element of scan(page, controlSelector)) {
+    const text = controlText(element)
+    const label = (element.getAttribute("aria-label") ?? "").toLowerCase()
+    const matches =
+      (hint !== "" && (text.toLowerCase().includes(hint) || label.includes(hint))) ||
+      (anyWithText && text !== "")
+    if (matches) {
+      into.add(element, `Button: "${text.slice(0, reasonTextLimit)}"`)
+    }
+  }
+}
+
+/** Links whose text contains the hint. */
+function linkPass(page: Page, into: Collector, hint: string): void {
+  if (hint === "" || into.full()) {
+    return
+  }
+  for (const element of scan(page, "a[href]")) {
+    const text = (element.textContent ?? "").trim()
+    if (text.toLowerCase().includes(hint)) {
+      into.add(element, `Link: "${text.slice(0, reasonTextLimit)}"`)
+    }
+  }
+}
+
 /** Candidates for a selector that matched nothing, best-effort and deduplicated. */
 export function findSelectorAlternatives(page: Page, failedSelector: string): Alternative[] {
-  const alternatives: Alternative[] = []
-  const seen = new Set<string>()
-
-  function add(element: Element, reason: string): void {
-    if (alternatives.length >= maxAlternatives) {
-      return
-    }
-    let selector: string
-    try {
-      selector = uniqueSelector(page, element)
-    } catch {
-      // nothing describes this element uniquely: suggesting it would mislead
-      return
-    }
-    if (seen.has(selector)) {
-      return
-    }
-    seen.add(selector)
-    alternatives.push({ selector, reason })
-  }
-
-  function full(): boolean {
-    return alternatives.length >= maxAlternatives
-  }
+  const into = collector(page)
+  const add = (element: Element, reason: string): void => into.add(element, reason)
+  const full = (): boolean => into.full()
 
   const hint = textHint(failedSelector).toLowerCase()
 
@@ -158,32 +204,8 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
   }
 
   const isButtonSelector = failedSelector.includes("button") || failedSelector.includes("btn")
-  if ((isButtonSelector || hint) && !full()) {
-    const controls = scan(
-      page,
-      'button, [role="button"], input[type="submit"], input[type="button"]',
-    )
-    for (const element of controls) {
-      const text = controlText(element)
-      const label = (element.getAttribute("aria-label") ?? "").toLowerCase()
-      const matches =
-        (hint && (text.toLowerCase().includes(hint) || label.includes(hint))) ||
-        (isButtonSelector && text)
-      if (matches) {
-        add(element, `Button: "${text.slice(0, reasonTextLimit)}"`)
-      }
-    }
-  }
-
-  const isLinkSelector = failedSelector.includes("a[") || failedSelector.includes("link")
-  if ((isLinkSelector || hint) && !full()) {
-    for (const element of scan(page, "a[href]")) {
-      const text = (element.textContent ?? "").trim()
-      if (hint && text.toLowerCase().includes(hint)) {
-        add(element, `Link: "${text.slice(0, reasonTextLimit)}"`)
-      }
-    }
-  }
+  buttonPass(page, into, hint, isButtonSelector)
+  linkPass(page, into, hint)
 
   if (hint && !full()) {
     const labels = labelTexts(page)
@@ -209,7 +231,7 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
     }
   }
 
-  return alternatives
+  return into.list
 }
 
 /**
@@ -222,12 +244,33 @@ export function buildElementNotFoundError(
   selector: string,
   _operation?: string,
 ): Error {
-  const lines = [`Element not found: ${selector}`]
+  return formatNotFound(
+    page,
+    `Element not found: ${selector}`,
+    findSelectorAlternatives(page, selector),
+  )
+}
 
-  const suggestions = findSelectorAlternatives(page, selector)
-  if (suggestions.length > 0) {
+/**
+ * The error a text target throws when nothing rendered the wanted text. The
+ * query is matched literally against control and link text, never parsed as
+ * CSS, so `#` and `.` inside it never reach the id and class passes.
+ */
+export function buildTextNotFoundError(page: Page, text: string): Error {
+  const into = collector(page)
+  const hint = text.toLowerCase()
+  buttonPass(page, into, hint, false)
+  linkPass(page, into, hint)
+  return formatNotFound(page, `Element not found: text "${text}"`, into.list)
+}
+
+/** The shared shape: first line, optional alternatives, page context, hint. */
+function formatNotFound(page: Page, firstLine: string, alternatives: Alternative[]): Error {
+  const lines = [firstLine]
+
+  if (alternatives.length > 0) {
     lines.push("", "Suggested alternatives:")
-    for (const suggestion of suggestions) {
+    for (const suggestion of alternatives) {
       lines.push(`  - ${suggestion.selector} (${suggestion.reason})`)
     }
   }
