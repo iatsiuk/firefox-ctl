@@ -132,7 +132,7 @@ Once a tab exists, the page commands run inside it through the content script. T
 cli/firefox-ctl createWindow --url https://example.com
 cli/firefox-ctl waitFor --selector h1                    # {found, elapsed, visible, position}
 cli/firefox-ctl getPageState                             # headings, links, buttons, inputs, landmarks
-cli/firefox-ctl getContent --selector "#main"            # textContent, add --includeHtml for innerHTML
+cli/firefox-ctl getContent --selector "#main"            # rendered text (innerText), --includeHtml for innerHTML, --tail N for the last N chars
 cli/firefox-ctl getElementInfo --selector h1             # attributes, computed styles, visibility
 cli/firefox-ctl getAccessibilitySnapshot --maxDepth 3    # role/name tree
 cli/firefox-ctl type --selector "input[name=q]" --text firefox-ctl
