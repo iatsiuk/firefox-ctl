@@ -43,7 +43,7 @@ Every command answers over the same path: content script or background API, then
 - Host removes the socket on SIGTERM, SIGINT and stdin EOF
 - Startup guard: `ipc.Listen` takes a flock on a lock file next to the socket, probes an existing socket by dialing (only `ECONNREFUSED` counts as stale), unlinks only a stale socket and returns `ErrAlreadyRunning` for a live one; the listener remembers the socket's device and inode and on close never unlinks a socket a newer host has replaced
 - Per-request timeout 5000-300000 ms, default 150000 (`--request-timeout`, sent as `_timeout`); host correlates by UUID and drops pending requests when the client disconnects. The client waits `_timeout` plus 5 s
-- Connection limits: 60 s idle timeout armed on accept and disarmed by the first complete request, 10 concurrent connections, 10 MB per request line (over it the host replies `Message too large` and closes)
+- Connection limits: 60 s idle timeout armed on accept and disarmed by the first complete request, 10 concurrent connections, 10 MB per request line (over it the host replies `Message too large`, shuts its write side and discards the client's leftover input for at most 1 s, an absolute deadline that incoming bytes do not extend, before closing the socket and freeing the connection slot)
 - Extension-initiated messages with no matching pending id: `ping` and `version` (host version, Go version, platform) are answered, anything else is logged to stderr and dropped
 
 ## Extension

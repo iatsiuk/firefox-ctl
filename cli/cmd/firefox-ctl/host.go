@@ -65,7 +65,7 @@ func runHost(ctx context.Context, cfg hostConfig) error {
 		}
 	}()
 
-	srv := host.NewServer(host.Options{Logger: cfg.logger, Version: version})
+	srv := host.NewServer(&host.Options{Logger: cfg.logger, Version: version})
 
 	cfg.logger.Printf("listening on %s", path)
 

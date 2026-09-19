@@ -170,6 +170,7 @@ func (e *extensionSide) reply(t *testing.T, msg *protocol.ExtensionMessage) {
 
 type options struct {
 	idleTimeout    time.Duration
+	drainTimeout   time.Duration
 	maxConns       int
 	maxRequestSize int
 	stdout         io.Writer
@@ -200,10 +201,11 @@ func start(t *testing.T, opt options) *fixture {
 	logs := &safeBuffer{}
 	clock := newFakeClock()
 
-	srv := NewServer(Options{
+	srv := NewServer(&Options{
 		Logger:         log.New(logs, "", 0),
 		Version:        testVersion,
 		IdleTimeout:    opt.idleTimeout,
+		DrainTimeout:   opt.drainTimeout,
 		MaxConnections: opt.maxConns,
 		MaxRequestSize: opt.maxRequestSize,
 		AfterFunc:      clock.afterFunc,
@@ -682,6 +684,112 @@ func TestServerRejectsOversizeRequest(t *testing.T) {
 	}
 }
 
+// refuse sends a request above the cap and reads the refusal, leaving the
+// connection open with the unread rest of the line still in flight.
+func (c *client) refuse(t *testing.T) {
+	t.Helper()
+
+	c.sendCommand(t, "type", map[string]any{"text": strings.Repeat("x", 1024)})
+
+	if resp := c.raw(t); resp["error"] != "Message too large" {
+		t.Fatalf("error = %v, want Message too large", resp["error"])
+	}
+}
+
+// TestServerDrainReleasesSlotAtDeadline covers a refused client that never
+// hangs up: once drainTimeout passes its socket is closed and its connection
+// slot goes back to the pool, so the next client is served.
+func TestServerDrainReleasesSlotAtDeadline(t *testing.T) {
+	t.Parallel()
+
+	const drain = 50 * time.Millisecond
+
+	f := start(t, options{maxRequestSize: 256, maxConns: 1, drainTimeout: drain})
+	stuck := f.dial()
+	stuck.refuse(t)
+
+	refused := time.Now()
+
+	next := f.dial()
+	next.sendCommand(t, "version", nil)
+
+	if cmd := f.ext.read(t); cmd.Command != "version" {
+		t.Errorf("command = %q, want version once the drained slot freed", cmd.Command)
+	}
+
+	if waited := time.Since(refused); waited < drain {
+		t.Errorf("slot freed after %s, before the %s drain deadline", waited, drain)
+	}
+
+	_ = stuck.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := stuck.r.ReadBytes('\n'); err == nil {
+		t.Error("refused client still readable after the drain deadline, want EOF or reset")
+	}
+
+	if !strings.Contains(f.logs.String(), "request above 256 bytes, closing client") {
+		t.Errorf("logs = %q, want the oversize refusal logged", f.logs.String())
+	}
+}
+
+// TestServerDrainDeadlineIsAbsolute covers a refused client that keeps
+// sending: incoming bytes must not push the deadline back, so the socket is
+// closed at about drainTimeout even though data never stops arriving.
+func TestServerDrainDeadlineIsAbsolute(t *testing.T) {
+	t.Parallel()
+
+	const drain = 100 * time.Millisecond
+
+	f := start(t, options{maxRequestSize: 256, drainTimeout: drain})
+	c := f.dial()
+	c.refuse(t)
+
+	refused := time.Now()
+	chunk := []byte(strings.Repeat("y", 4096))
+
+	var closedAfter time.Duration
+
+	for {
+		_ = c.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		if _, err := c.conn.Write(chunk); err != nil {
+			closedAfter = time.Since(refused)
+
+			break
+		}
+
+		if time.Since(refused) > 3*time.Second {
+			t.Fatal("writes still accepted 3 s after the refusal; the drain deadline was extended")
+		}
+
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if closedAfter > 10*drain {
+		t.Errorf("socket closed %s after the refusal, want about %s: the deadline was extended by the stream", closedAfter, drain)
+	}
+}
+
+// TestServerCloseInterruptsDrain covers shutdown while a drain is in flight:
+// closing the clients must interrupt the discard copy so Run returns at once
+// rather than after the full drain deadline.
+func TestServerCloseInterruptsDrain(t *testing.T) {
+	t.Parallel()
+
+	f := start(t, options{maxRequestSize: 256, drainTimeout: 30 * time.Second})
+	c := f.dial()
+	c.refuse(t)
+
+	started := time.Now()
+	f.cancel()
+
+	if err := f.wait(); err != nil {
+		t.Errorf("Run() = %v, want nil", err)
+	}
+
+	if took := time.Since(started); took > time.Second {
+		t.Errorf("Run returned after %s, want well under the 30 s drain deadline", took)
+	}
+}
+
 func TestServerStopsOnStdinEOF(t *testing.T) {
 	t.Parallel()
 
@@ -743,7 +851,8 @@ func TestServerDropsPendingOnShutdown(t *testing.T) {
 func TestServerServeDropsConnectionDuringShutdown(t *testing.T) {
 	t.Parallel()
 
-	srv := NewServer(Options{Version: testVersion})
+	srv := NewServer(&Options{
+		Version: testVersion})
 	srv.closing = true
 
 	server, client := net.Pipe()
@@ -1004,7 +1113,8 @@ func TestServerLimitsConnections(t *testing.T) {
 func TestServerReplySkipsClosedClient(t *testing.T) {
 	t.Parallel()
 
-	srv := NewServer(Options{Version: testVersion})
+	srv := NewServer(&Options{
+		Version: testVersion})
 
 	server, client := net.Pipe()
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
@@ -1025,7 +1135,8 @@ func TestServerReplyLogsWriteError(t *testing.T) {
 	t.Parallel()
 
 	logs := &safeBuffer{}
-	srv := NewServer(Options{Logger: log.New(logs, "", 0), Version: testVersion})
+	srv := NewServer(&Options{
+		Logger: log.New(logs, "", 0), Version: testVersion})
 
 	server, client := net.Pipe()
 	if err := client.Close(); err != nil {
@@ -1050,7 +1161,7 @@ func TestServerReplyBoundedByWriteTimeout(t *testing.T) {
 	t.Parallel()
 
 	logs := &safeBuffer{}
-	srv := NewServer(Options{
+	srv := NewServer(&Options{
 		Logger:       log.New(logs, "", 0),
 		Version:      testVersion,
 		WriteTimeout: 20 * time.Millisecond,
@@ -1087,7 +1198,7 @@ func TestServerReplyClosesClientAfterWriteTimeout(t *testing.T) {
 	t.Parallel()
 
 	logs := &safeBuffer{}
-	srv := NewServer(Options{
+	srv := NewServer(&Options{
 		Logger:       log.New(logs, "", 0),
 		Version:      testVersion,
 		WriteTimeout: 20 * time.Millisecond,
@@ -1166,7 +1277,8 @@ func shortTempDir(t *testing.T) string {
 func TestNewServerDefaultsNilLoggerToStderr(t *testing.T) {
 	t.Parallel()
 
-	srv := NewServer(Options{Version: testVersion})
+	srv := NewServer(&Options{
+		Version: testVersion})
 
 	if srv.log == nil {
 		t.Fatal("log = nil, want a default stderr logger")

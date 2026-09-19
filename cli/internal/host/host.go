@@ -25,9 +25,9 @@ const (
 	// MaxRequestSize caps one NDJSON request line; a longer one is refused and
 	// the connection is closed.
 	MaxRequestSize = 10 * 1024 * 1024
-	// drainTimeout bounds how long a refused client may keep sending before
-	// its socket is closed anyway.
-	drainTimeout = time.Second
+	// DefaultDrainTimeout bounds how long a client refused for an oversize
+	// request may keep sending before its socket is closed anyway.
+	DefaultDrainTimeout = time.Second
 	// DefaultIdleTimeout closes clients that connect but never send a request.
 	DefaultIdleTimeout = 60 * time.Second
 	// DefaultMaxConnections bounds concurrently served CLI clients.
@@ -56,6 +56,7 @@ type Options struct {
 	Version        string
 	IdleTimeout    time.Duration
 	WriteTimeout   time.Duration
+	DrainTimeout   time.Duration
 	MaxConnections int
 	MaxRequestSize int
 	NewID          func() string
@@ -69,6 +70,7 @@ type Server struct {
 	version        string
 	idleTimeout    time.Duration
 	writeTimeout   time.Duration
+	drainTimeout   time.Duration
 	maxConns       int
 	maxRequestSize int
 	newID          func() string
@@ -99,13 +101,19 @@ type clientConn struct {
 	closed bool
 }
 
-// NewServer returns a Server with defaults applied for unset options.
-func NewServer(opts Options) *Server {
+// NewServer returns a Server with defaults applied for unset options; a nil
+// opts means all defaults.
+func NewServer(opts *Options) *Server {
+	if opts == nil {
+		opts = &Options{}
+	}
+
 	s := &Server{
 		log:            opts.Logger,
 		version:        opts.Version,
 		idleTimeout:    opts.IdleTimeout,
 		writeTimeout:   opts.WriteTimeout,
+		drainTimeout:   opts.DrainTimeout,
 		maxConns:       opts.MaxConnections,
 		maxRequestSize: opts.MaxRequestSize,
 		newID:          opts.NewID,
@@ -125,6 +133,10 @@ func NewServer(opts Options) *Server {
 
 	if s.writeTimeout == 0 {
 		s.writeTimeout = DefaultWriteTimeout
+	}
+
+	if s.drainTimeout == 0 {
+		s.drainTimeout = DefaultDrainTimeout
 	}
 
 	if s.maxConns <= 0 {
@@ -296,7 +308,7 @@ func (s *Server) drain(c *clientConn) {
 		_ = uc.CloseWrite()
 	}
 
-	_ = c.nc.SetReadDeadline(time.Now().Add(drainTimeout))
+	_ = c.nc.SetReadDeadline(time.Now().Add(s.drainTimeout))
 	_, _ = io.Copy(io.Discard, c.nc)
 }
 
