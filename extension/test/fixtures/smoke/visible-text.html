@@ -1,0 +1,141 @@
+<!doctype html>
+<!--
+  Manual Firefox smoke fixture for getContent (innerText, hidden, --tail),
+  the rendered-only alternatives and the visible text of a click result.
+
+  Serve it over a local HTTP server, not file://: createWindow answers
+  `Error: Illegal URL` to a file:// URL.
+
+    cd extension/test/fixtures/smoke && python3 -m http.server 8765
+    firefox-ctl createWindow --url http://localhost:8765/visible-text.html
+
+  Then run the checks listed under "Post-Completion" in
+  docs/plans/20260919-visible-text-content.md. Every section below serves one:
+
+    #markers        an inline <script> and <style> inside <main>: SCRIPT-MARKER
+                    and STYLE-MARKER are textContent and never innerText
+    #hidden-para    display: none, so HIDDEN-MARKER is absent from the text
+    #visibility     VIS-MARKER under visibility: hidden is absent, the
+                    visibility: visible child OVERRIDE-MARKER is present
+    #contents-root  display: contents: the root has no boxes, so the direct
+                    getter falls back to raw textContent, which is where
+                    CONTENTS-HIDDEN-MARKER and CONTENTS-SCRIPT-MARKER show up;
+                    reading <main> instead lays the subtree out and drops them
+    #zero-root      a zero-height container whose positioned child still shows
+    #breaks         `line one<br>line two` and a <pre> with two leading spaces
+    #chart          an <svg>: no innerText getter, so the result is textContent
+    #hidden-root    display: none section: text "", hidden: true, full --includeHtml
+    #log            exactly 3000 characters for --tail 200: the prefix marker
+                    must name 2800 characters
+    #br-button      renders `Apply now` and hides itself on click
+    #ghosts         a hidden `Ghost action` next to a visible `Ghost item`
+
+  Nothing outside #log is 3000 characters long, and no text on this page
+  contains the string `Nothingness`.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>firefox-ctl visible text smoke</title>
+    <style>
+      body { font: 14px system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
+      h2 { margin-top: 2rem; font-size: 1rem; }
+      #hidden-para { display: none; }
+      #vis-hidden { visibility: hidden; }
+      #vis-parent { visibility: hidden; }
+      #vis-override { visibility: visible; }
+      #contents-root { display: contents; }
+      #contents-hidden { display: none; }
+      #zero-root { height: 0; position: relative; }
+      #zero-child { position: absolute; top: 0; left: 0; }
+      #hidden-root { display: none; }
+      #log { font-family: ui-monospace, monospace; font-size: 11px; }
+      #ghost-action { display: none; }
+    </style>
+  </head>
+  <body>
+    <h1>firefox-ctl visible text smoke</h1>
+
+    <main>
+      <h2>Script and style text inside main</h2>
+      <section id="markers">
+        <p>Markers below are textContent only.</p>
+        <style>/* STYLE-MARKER */ #markers p { color: #333; }</style>
+        <script>
+          window.scriptMarker = "SCRIPT-MARKER"
+        </script>
+      </section>
+
+      <h2>display: none and visibility: hidden</h2>
+      <p id="hidden-para">HIDDEN-MARKER</p>
+      <p><span id="vis-hidden">VIS-MARKER</span></p>
+      <p id="vis-parent">hidden parent <span id="vis-override">OVERRIDE-MARKER</span></p>
+
+      <h2>A display: contents root</h2>
+      <div id="contents-root">
+        <p>contents one<br />contents two</p>
+        <p id="contents-hidden">CONTENTS-HIDDEN-MARKER</p>
+        <script>
+          window.contentsScriptMarker = "CONTENTS-SCRIPT-MARKER"
+        </script>
+      </div>
+
+      <h2>A zero-height container with a positioned child</h2>
+      <div id="zero-root"><span id="zero-child">ZERO-MARKER</span></div>
+
+      <h2>Line breaks and preformatted text</h2>
+      <section id="breaks">
+        <p id="two-lines">line one<br />line two</p>
+        <pre id="indented">  two leading spaces
+  and a second line</pre>
+      </section>
+
+      <h2>SVG text is not innerText</h2>
+      <svg id="chart" width="200" height="40" xmlns="http://www.w3.org/2000/svg">
+        <text x="0" y="24">SVG-MARKER label</text>
+      </svg>
+
+      <h2>A display: none section</h2>
+      <section id="hidden-root">
+        <p>ROOT-HIDDEN-MARKER</p>
+        <button type="button" id="hidden-root-button">Never rendered</button>
+      </section>
+
+      <h2>3000 characters for --tail</h2>
+      <pre id="log"></pre>
+
+      <h2>A button rendering across a break</h2>
+      <p><button type="button" id="br-button">Apply<br />now</button></p>
+
+      <h2>Hidden and visible near misses</h2>
+      <section id="ghosts">
+        <button type="button" id="ghost-action">Ghost action</button>
+        <button type="button" id="ghost-item">Ghost item</button>
+      </section>
+    </main>
+
+    <script>
+      // #log carries exactly 3000 characters with no leading or trailing
+      // whitespace: whole numbered lines first, the remainder padded with
+      // dashes, so `--tail 200` must report exactly 2800 dropped characters
+      const logLines = []
+      let logLength = 0
+      for (let n = 1; ; n += 1) {
+        const line = `${String(n).padStart(4, "0")} log line with filler`
+        const cost = line.length + (logLength === 0 ? 0 : 1)
+        if (logLength + cost > 3000) break
+        logLength += cost
+        logLines.push(line)
+      }
+      const logText = logLines.join("\n")
+      document.getElementById("log").textContent = logText + "-".repeat(3000 - logText.length)
+
+      // the handler hides the button, so a `text` read after the click would
+      // answer "": the result must still say `Apply now`
+      document.getElementById("br-button").addEventListener("click", (event) => {
+        event.preventDefault()
+        event.currentTarget.style.display = "none"
+      })
+    </script>
+  </body>
+</html>
