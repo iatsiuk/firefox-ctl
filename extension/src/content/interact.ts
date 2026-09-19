@@ -11,7 +11,14 @@ import {
   validateSelector,
 } from "./selector"
 import { buildElementNotFoundError, buildTextNotFoundError } from "./suggest"
-import { ambiguousText, describeTarget, findByText, resolveTarget, scopeRoot } from "./text-target"
+import {
+  ambiguousText,
+  describeTarget,
+  findByText,
+  resolveTarget,
+  scopeRoot,
+  visibleText,
+} from "./text-target"
 import { nextFrame } from "./timing"
 
 const CLICK_TEXT_LIMIT = 100
@@ -124,12 +131,17 @@ async function requireTextTarget(
   }
 }
 
-function clickResult(element: HTMLElement, selector: string | null, matchedBy: string): JsonValue {
+function clickResult(
+  element: HTMLElement,
+  selector: string | null,
+  matchedBy: string,
+  text: string,
+): JsonValue {
   return {
     selector,
     clicked: true,
     tagName: element.tagName.toLowerCase(),
-    text: element.textContent?.trim().slice(0, CLICK_TEXT_LIMIT) || "",
+    text: text.slice(0, CLICK_TEXT_LIMIT),
     id: element.id || null,
     className: element.className || null,
     matchedBy,
@@ -144,16 +156,20 @@ export async function click(params: JsonObject, page: Page): Promise<JsonValue> 
     element.scrollIntoView({ behavior: "smooth", block: "center" })
     // let the smooth scroll settle before the click lands
     await nextFrame(page)
+    // read before the click: a handler that hides or removes the button must
+    // not change what the result reports
+    const text = visibleText(element)
     element.click()
-    return clickResult(element, selector, "selector")
+    return clickResult(element, selector, "selector", text)
   }
 
   const element = await requireTextTarget(params, page, target.text, target.scope)
   // generated before the click: a click that removes its own element or starts
   // a navigation must not be reported as failed
   const selector = describeTarget(page, element)
+  const text = visibleText(element)
   element.click()
-  return clickResult(element, selector, "text")
+  return clickResult(element, selector, "text", text)
 }
 
 function setInputValue(page: Page, element: Editable, value: string): void {

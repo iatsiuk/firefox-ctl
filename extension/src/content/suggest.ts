@@ -1,10 +1,15 @@
 // Diagnostics for a target that matched nothing: near-miss candidates for the
 // failed selector or text and the multi-line error the interaction actions
 // throw, with search caps and reason wording. Every suggested selector comes
-// from the shared generator, so it is verified before it is offered.
+// from the shared generator, so it is verified before it is offered. The
+// discovery passes, the ones matching what a user reads (buttons, links,
+// fields, `aria-label`), report rendered elements only; the locator passes
+// (id, class, input `name`, `data-testid`) do not, because a near-miss
+// selector for a hidden element is still the selector the caller wanted.
 
 import type { Page } from "./page"
 import { classTokens, uniqueSelector } from "./unique-selector"
+import { isRendered } from "./visibility"
 
 export interface Alternative {
   selector: string
@@ -18,8 +23,14 @@ const reasonTextLimit = 30
 
 const fieldSelector = "input, textarea, select"
 
-function scan(page: Page, selector: string): Element[] {
-  return Array.from(page.document.querySelectorAll(selector)).slice(0, maxSearch)
+/**
+ * The first `maxSearch` matches, optionally narrowed to the rendered ones. The
+ * cap applies first, so `renderedOnly` never widens the scan: hidden matches
+ * spend the budget whether or not they are reported.
+ */
+function scan(page: Page, selector: string, renderedOnly = false): Element[] {
+  const found = Array.from(page.document.querySelectorAll(selector)).slice(0, maxSearch)
+  return renderedOnly ? found.filter((element) => isRendered(page, element)) : found
 }
 
 function controlText(element: Element): string {
@@ -134,7 +145,7 @@ function buttonPass(page: Page, into: Collector, hint: string, anyWithText: bool
   if ((hint === "" && !anyWithText) || into.full()) {
     return
   }
-  for (const element of scan(page, controlSelector)) {
+  for (const element of scan(page, controlSelector, true)) {
     const text = controlText(element)
     const label = (element.getAttribute("aria-label") ?? "").toLowerCase()
     const matches =
@@ -151,7 +162,7 @@ function linkPass(page: Page, into: Collector, hint: string): void {
   if (hint === "" || into.full()) {
     return
   }
-  for (const element of scan(page, "a[href]")) {
+  for (const element of scan(page, "a[href]", true)) {
     const text = (element.textContent ?? "").trim()
     if (text.toLowerCase().includes(hint)) {
       into.add(element, `Link: "${text.slice(0, reasonTextLimit)}"`)
@@ -207,7 +218,7 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
 
   if (hint && !into.full()) {
     const labels = labelTexts(page)
-    for (const element of scan(page, fieldSelector)) {
+    for (const element of scan(page, fieldSelector, true)) {
       const described = [
         ...(labels.get(element.id) ?? []),
         element.getAttribute("placeholder") ?? "",
@@ -221,7 +232,7 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
   }
 
   if (hint && !into.full()) {
-    for (const element of scan(page, "[aria-label]")) {
+    for (const element of scan(page, "[aria-label]", true)) {
       const label = element.getAttribute("aria-label") ?? ""
       if (label.toLowerCase().includes(hint)) {
         into.add(element, `aria-label="${label}"`)

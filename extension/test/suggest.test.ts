@@ -7,13 +7,40 @@ import {
   buildTextNotFoundError,
   findSelectorAlternatives,
 } from "../src/content/suggest"
-import { assertResolves, fakePage, stubLocation, stubTop } from "./dom"
+import {
+  assertResolves,
+  type FakePage,
+  fakePage,
+  stubLocation,
+  stubRect,
+  stubStyle,
+  stubTop,
+} from "./dom"
 import errors from "./fixtures/errors.json"
 
 beforeEach(() => {
   document.body.innerHTML = ""
   document.title = ""
 })
+
+/** happy-dom has no layout: every element gets a box unless listed in `hidden`. */
+function showAll(hidden: string[] = []): void {
+  const invisible = new Set<Element>()
+  for (const selector of hidden) {
+    for (const target of document.querySelectorAll(selector)) {
+      invisible.add(target)
+    }
+  }
+  for (const target of document.querySelectorAll("*")) {
+    stubRect(target, invisible.has(target) ? {} : { width: 100, height: 20 })
+  }
+}
+
+/** A page whose every element is rendered, the state the discovery passes need. */
+function shownPage(hidden: string[] = []): FakePage {
+  showAll(hidden)
+  return fakePage()
+}
 
 function el(selector: string): Element {
   const found = document.querySelector(selector)
@@ -26,7 +53,7 @@ function el(selector: string): Element {
 describe("findSelectorAlternatives", () => {
   test("suggests ids that contain the failed id fragment", () => {
     document.body.innerHTML = '<input id="search-input"><input id="searchbox"><input id="other">'
-    expect(findSelectorAlternatives(fakePage(), "#search")).toEqual([
+    expect(findSelectorAlternatives(shownPage(), "#search")).toEqual([
       { selector: "#search-input", reason: "Similar ID found" },
       { selector: "#searchbox", reason: "Similar ID found" },
     ])
@@ -37,7 +64,7 @@ describe("findSelectorAlternatives", () => {
       '<div id="dup-save" class="alpha">a</div>' +
       '<div id="dup-save" class="beta">b</div>' +
       '<input id="1save" class="digit-save">'
-    const page = fakePage()
+    const page = shownPage()
 
     const alternatives = findSelectorAlternatives(page, "#sav")
 
@@ -51,7 +78,7 @@ describe("findSelectorAlternatives", () => {
 
   test("suggests elements whose class contains the failed class fragment", () => {
     document.body.innerHTML = '<div class="card-body">a</div><div class="footer">b</div>'
-    expect(findSelectorAlternatives(fakePage(), ".card")).toEqual([
+    expect(findSelectorAlternatives(shownPage(), ".card")).toEqual([
       { selector: ".card-body", reason: "Similar class found" },
     ])
   })
@@ -61,7 +88,7 @@ describe("findSelectorAlternatives", () => {
       '<button id="send">Send it now please, all of it</button>' +
       "<button>   </button>" +
       '<div role="button" class="ghost">Cancel</div>'
-    expect(findSelectorAlternatives(fakePage(), "button.missing")).toEqual([
+    expect(findSelectorAlternatives(shownPage(), "button.missing")).toEqual([
       { selector: "#send", reason: 'Button: "Send it now please, all of it"' },
       { selector: ".ghost", reason: 'Button: "Cancel"' },
     ])
@@ -71,7 +98,7 @@ describe("findSelectorAlternatives", () => {
     document.body.innerHTML =
       '<button id="save">Save draft</button><button id="drop">Delete</button>' +
       '<a href="/save" id="savelink">Save link</a><a href="/x" id="x">Other</a>'
-    expect(findSelectorAlternatives(fakePage(), ':contains("save")')).toEqual([
+    expect(findSelectorAlternatives(shownPage(), ':contains("save")')).toEqual([
       { selector: "#save", reason: 'Button: "Save draft"' },
       { selector: "#savelink", reason: 'Link: "Save link"' },
     ])
@@ -79,14 +106,14 @@ describe("findSelectorAlternatives", () => {
 
   test("matches an aria-label hint on any element", () => {
     document.body.innerHTML = '<div class="menu" aria-label="Main menu">m</div>'
-    expect(findSelectorAlternatives(fakePage(), '[aria-label="main"]')).toEqual([
+    expect(findSelectorAlternatives(shownPage(), '[aria-label="main"]')).toEqual([
       { selector: '[aria-label="Main menu"]', reason: 'aria-label="Main menu"' },
     ])
   })
 
   test("returns nothing when the selector offers no hint", () => {
     document.body.innerHTML = "<p>text</p>"
-    expect(findSelectorAlternatives(fakePage(), "section > p.gone")).toEqual([])
+    expect(findSelectorAlternatives(shownPage(), "section > p.gone")).toEqual([])
   })
 
   test("reports each element once and caps the list at five", () => {
@@ -94,7 +121,7 @@ describe("findSelectorAlternatives", () => {
       { length: 8 },
       (_, index) => `<button id="btn-${index}" class="btn">Go ${index}</button>`,
     ).join("")
-    const alternatives = findSelectorAlternatives(fakePage(), "#btn")
+    const alternatives = findSelectorAlternatives(shownPage(), "#btn")
     expect(alternatives).toHaveLength(5)
     expect(new Set(alternatives.map((item) => item.selector)).size).toBe(5)
   })
@@ -108,7 +135,7 @@ describe("buildElementNotFoundError", () => {
 
   test("lists suggestions, page context and the hint", () => {
     document.body.innerHTML = '<button id="submit-button">Submit</button>'
-    const page = fakePage()
+    const page = shownPage()
     context(page)
     stubTop(page.window, true)
 
@@ -133,7 +160,7 @@ describe("buildElementNotFoundError", () => {
 
   test("omits the suggestion block when nothing matches", () => {
     document.body.innerHTML = "<p>text</p>"
-    const page = fakePage()
+    const page = shownPage()
     context(page)
     stubTop(page.window, true)
 
@@ -154,7 +181,7 @@ describe("buildElementNotFoundError", () => {
   })
 
   test("warns when the content script runs inside an iframe", () => {
-    const page = fakePage()
+    const page = shownPage()
     context(page)
     stubTop(page.window, false)
 
@@ -166,7 +193,7 @@ describe("buildElementNotFoundError", () => {
 
   test("uses the pinned error texts", () => {
     document.body.innerHTML = '<div id="pane-main">x</div>'
-    const page = fakePage()
+    const page = shownPage()
     context(page)
     stubTop(page.window, true)
 
@@ -187,7 +214,7 @@ describe("buildTextNotFoundError", () => {
 
   function textPage(html: string): Page {
     document.body.innerHTML = html
-    const page = fakePage()
+    const page = shownPage()
     context(page)
     stubTop(page.window, true)
     return page
@@ -247,7 +274,7 @@ describe("buildTextNotFoundError", () => {
 
   test("warns when the content script runs inside an iframe", () => {
     document.body.innerHTML = ""
-    const page = fakePage()
+    const page = shownPage()
     context(page)
     stubTop(page.window, false)
 
@@ -323,7 +350,7 @@ describe("form-aware alternatives", () => {
 
   function formPage(): Page {
     document.body.innerHTML = FORM_HTML
-    return fakePage()
+    return shownPage()
   }
 
   test("suggests an input whose name contains the failed name literal", () => {
@@ -359,7 +386,7 @@ describe("form-aware alternatives", () => {
     document.body.innerHTML =
       Array.from({ length: 100 }, () => '<input name="zzz">').join("") +
       '<input id="late-field" name="email">'
-    expect(findSelectorAlternatives(fakePage(), 'input[name="email"]')).toEqual([])
+    expect(findSelectorAlternatives(shownPage(), 'input[name="email"]')).toEqual([])
   })
 
   test("caps the name suggestions at five", () => {
@@ -367,7 +394,7 @@ describe("form-aware alternatives", () => {
       { length: 8 },
       (_, index) => `<input id="mail-box-${index}" name="email-${index}">`,
     ).join("")
-    const page = fakePage()
+    const page = shownPage()
 
     const alternatives = findSelectorAlternatives(page, 'input[name="email"]')
 
@@ -381,7 +408,7 @@ describe("form-aware alternatives", () => {
   test("suggests elements whose data-testid contains the failed literal", () => {
     document.body.innerHTML =
       '<div data-testid="submit-btn-primary">a</div><div data-testid="cancel">b</div>'
-    const page = fakePage()
+    const page = shownPage()
 
     expect(findSelectorAlternatives(page, '[data-testid="submit-btn"]')).toEqual([
       { selector: '[data-testid="submit-btn-primary"]', reason: "Similar data-testid found" },
@@ -391,14 +418,14 @@ describe("form-aware alternatives", () => {
 
   test("drops a trailing index from the data-testid literal", () => {
     document.body.innerHTML = '<div data-testid="submit">a</div>'
-    expect(findSelectorAlternatives(fakePage(), '[data-testid="submit-2"]')).toEqual([
+    expect(findSelectorAlternatives(shownPage(), '[data-testid="submit-2"]')).toEqual([
       { selector: '[data-testid="submit"]', reason: "Similar data-testid found" },
     ])
   })
 
   test("adds nothing when no data-testid is close", () => {
     document.body.innerHTML = '<div data-testid="submit">a</div>'
-    expect(findSelectorAlternatives(fakePage(), '[data-testid="zzz"]')).toEqual([])
+    expect(findSelectorAlternatives(shownPage(), '[data-testid="zzz"]')).toEqual([])
   })
 
   test("matches a hint against input labels, placeholders and aria-labels", () => {
@@ -407,7 +434,7 @@ describe("form-aware alternatives", () => {
       '<input id="other-field" placeholder="Your email here">' +
       '<input id="aria-field" aria-label="Email backup">' +
       '<input id="far-field" placeholder="Phone">'
-    const page = fakePage()
+    const page = shownPage()
 
     const alternatives = findSelectorAlternatives(page, '[aria-label="mail"]')
 
@@ -424,7 +451,7 @@ describe("form-aware alternatives", () => {
   test("reports the field that actually matched the hint, not the first non-empty one", () => {
     document.body.innerHTML =
       '<label for="mixed-field">Full Name</label><input id="mixed-field" placeholder="Your mail here">'
-    const page = fakePage()
+    const page = shownPage()
 
     const alternatives = findSelectorAlternatives(page, '[aria-label="mail"]')
 
@@ -435,7 +462,7 @@ describe("form-aware alternatives", () => {
     document.body.innerHTML =
       '<label for="dual-field">Account</label><label for="dual-field">Email address</label>' +
       '<input id="dual-field">'
-    const page = fakePage()
+    const page = shownPage()
 
     const alternatives = findSelectorAlternatives(page, '[aria-label="mail"]')
 
@@ -445,7 +472,7 @@ describe("form-aware alternatives", () => {
   test("reaches the new passes through getElementInfo", () => {
     const extra = '<div data-testid="submit-btn">go</div><input id="x-field" aria-label="Mail">'
     document.body.innerHTML = FORM_HTML + extra
-    const page = fakePage()
+    const page = shownPage()
 
     const messages = [
       'input[name="email-1"]',
@@ -463,5 +490,115 @@ describe("form-aware alternatives", () => {
     expect(messages[0]).toContain("  - #email-field (Similar input name found)")
     expect(messages[1]).toContain('  - [data-testid="submit-btn"] (Similar data-testid found)')
     expect(messages[2]).toContain('  - [aria-label="Mail"] (Input: "Mail")')
+  })
+})
+
+describe("rendered alternatives", () => {
+  test("suggests only rendered controls in the button pass", () => {
+    document.body.innerHTML =
+      '<button id="save-none">Save none</button>' +
+      '<button id="save-zero">Save zero</button>' +
+      '<button id="save-live">Save live</button>'
+    const page = shownPage(["#save-zero"])
+    stubStyle(el("#save-none"), { display: "none" })
+
+    expect(findSelectorAlternatives(page, ':contains("save")')).toEqual([
+      { selector: "#save-live", reason: 'Button: "Save live"' },
+    ])
+  })
+
+  test("suggests only rendered links", () => {
+    document.body.innerHTML =
+      '<a href="/a" id="save-hidden">Save hidden</a><a href="/b" id="save-live">Save live</a>'
+    const page = shownPage()
+    stubStyle(el("#save-hidden"), { display: "none" })
+
+    expect(findSelectorAlternatives(page, ':contains("save")')).toEqual([
+      { selector: "#save-live", reason: 'Link: "Save live"' },
+    ])
+  })
+
+  test("suggests only rendered fields matched by label or placeholder", () => {
+    document.body.innerHTML =
+      '<label for="mail-hidden">Email hidden</label><input id="mail-hidden">' +
+      '<label for="mail-live">Email live</label><input id="mail-live">' +
+      '<input id="ph-hidden" placeholder="Your email hidden">' +
+      '<input id="ph-live" placeholder="Your email live">'
+    const page = shownPage(["#ph-hidden"])
+    stubStyle(el("#mail-hidden"), { display: "none" })
+
+    expect(findSelectorAlternatives(page, '[aria-label="mail"]')).toEqual([
+      { selector: "#mail-live", reason: 'Input: "Email live"' },
+      { selector: "#ph-live", reason: 'Input: "Your email live"' },
+    ])
+  })
+
+  test("suggests only rendered elements in the aria-label pass", () => {
+    document.body.innerHTML =
+      '<div id="menu-hidden" aria-label="Main menu hidden">a</div>' +
+      '<div id="menu-live" aria-label="Main menu live">b</div>'
+    const page = shownPage()
+    stubStyle(el("#menu-hidden"), { display: "none" })
+
+    expect(findSelectorAlternatives(page, '[aria-label="main"]')).toEqual([
+      { selector: '[aria-label="Main menu live"]', reason: 'aria-label="Main menu live"' },
+    ])
+  })
+
+  test("keeps hidden elements in the id and class passes", () => {
+    document.body.innerHTML = '<input id="search-input"><div class="card-body">a</div>'
+    const page = shownPage()
+    stubStyle(el("#search-input"), { display: "none" })
+    stubStyle(el(".card-body"), { display: "none" })
+
+    expect(findSelectorAlternatives(page, "#search")).toEqual([
+      { selector: "#search-input", reason: "Similar ID found" },
+    ])
+    expect(findSelectorAlternatives(page, ".card")).toEqual([
+      { selector: ".card-body", reason: "Similar class found" },
+    ])
+  })
+
+  test("keeps hidden elements in the name and data-testid passes", () => {
+    document.body.innerHTML =
+      '<input id="mail-field" name="email"><div data-testid="submit-btn-primary">b</div>'
+    const page = shownPage()
+    stubStyle(el("#mail-field"), { display: "none" })
+    stubStyle(el("[data-testid]"), { display: "none" })
+
+    expect(findSelectorAlternatives(page, 'input[name="mail"]')).toEqual([
+      { selector: "#mail-field", reason: "Similar input name found" },
+    ])
+    expect(findSelectorAlternatives(page, '[data-testid="submit-btn"]')).toEqual([
+      { selector: '[data-testid="submit-btn-primary"]', reason: "Similar data-testid found" },
+    ])
+  })
+
+  // the cap is the scan budget, not a suggestion budget: hidden matches consume
+  // it, so the filter can only ever shorten what the scan already returned
+  test("caps the scan before the filter runs", () => {
+    document.body.innerHTML = Array.from(
+      { length: 101 },
+      (_, index) => `<button id="ghost-${index}">Ghost ${index}</button>`,
+    ).join("")
+    const page = shownPage()
+    for (let index = 0; index < 100; index++) {
+      stubStyle(el(`#ghost-${index}`), { display: "none" })
+    }
+
+    expect(findSelectorAlternatives(page, ':contains("ghost")')).toEqual([])
+  })
+
+  test("lists only rendered controls in the text diagnostics", () => {
+    document.body.innerHTML =
+      '<button id="ghost-action">Ghost action</button>' +
+      '<button id="ghost-item">Ghost item</button>'
+    const page = shownPage()
+    stubStyle(el("#ghost-action"), { display: "none" })
+
+    const message = buildTextNotFoundError(page, "Ghost").message
+
+    expect(message).toContain('  - #ghost-item (Button: "Ghost item")')
+    expect(message).not.toContain("Ghost action")
   })
 })

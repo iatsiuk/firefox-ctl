@@ -2,7 +2,15 @@ import { beforeEach, describe, expect, test } from "bun:test"
 
 import { click, pressKey, type as typeAction } from "../src/content/interact"
 import type { JsonObject } from "../src/protocol"
-import { assertResolves, type FakePage, fakePage, seamPage, stubLocation, stubRect } from "./dom"
+import {
+  assertResolves,
+  type FakePage,
+  fakePage,
+  seamPage,
+  stubLocation,
+  stubRect,
+  stubStyle,
+} from "./dom"
 import errors from "./fixtures/errors.json"
 
 beforeEach(() => {
@@ -156,6 +164,22 @@ function mount(html: string, hidden: string[] = []): FakePage {
   document.body.innerHTML = html
   showAll(hidden)
   return fakePage()
+}
+
+/**
+ * Both text getters of one element, answering the values the seam holds:
+ * happy-dom has no layout, so its `innerText` never differs from `textContent`
+ * on its own. The returned record is mutable, so a click handler can change
+ * what a later read would answer.
+ */
+function textSeam(element: Element, values: { innerText: string; textContent: string }) {
+  const state = { ...values }
+  Object.defineProperty(element, "innerText", { configurable: true, get: () => state.innerText })
+  Object.defineProperty(element, "textContent", {
+    configurable: true,
+    get: () => state.textContent,
+  })
+  return state
 }
 
 /** Counts the click events one element receives. */
@@ -481,6 +505,66 @@ describe("click by text", () => {
     await expect(click({ selector: "#go", text: "Apply" }, page)).rejects.toThrow(
       errors.targetExclusive,
     )
+  })
+})
+
+describe("click text", () => {
+  test("reports the visible text in both modes", async () => {
+    const modes: JsonObject[] = [{ selector: "#apply" }, { text: "Apply now" }]
+    for (const params of modes) {
+      const page = mount('<button id="apply">seam</button>')
+      const button = el("#apply")
+      recordScrollIntoView(button)
+      textSeam(button, { innerText: "Apply\nnow", textContent: "Applynow" })
+
+      const pending = click(params, page)
+      await page.advance(0)
+
+      expect(result(await pending).text).toBe("Apply now")
+    }
+  })
+
+  test("truncates the visible text at 100 characters in text mode", async () => {
+    const words = "word ".repeat(40).trim()
+    const page = mount(`<a href="/x">${words}</a>`)
+    recordScrollIntoView(el("a"))
+
+    const pending = click({ text: words }, page)
+    await page.advance(0)
+
+    expect((result(await pending).text as string).length).toBe(100)
+  })
+
+  test("reports the text of a button its own handler hides", async () => {
+    const page = mount('<button id="apply">seam</button>')
+    const button = el("#apply")
+    recordScrollIntoView(button)
+    const seam = textSeam(button, { innerText: "Apply\nnow", textContent: "Applynow" })
+    button.addEventListener("click", () => {
+      stubStyle(button, { display: "none" })
+      // what the browser answers for a `display: none` element
+      seam.innerText = ""
+    })
+
+    const pending = click({ selector: "#apply" }, page)
+    await page.advance(0)
+
+    expect(result(await pending).text).toBe("Apply now")
+  })
+
+  test("reports the text of a button its own handler removes", async () => {
+    const page = mount('<button id="apply">seam</button>')
+    const button = el("#apply")
+    recordScrollIntoView(button)
+    textSeam(button, { innerText: "Apply\nnow", textContent: "Applynow" })
+    button.addEventListener("click", () => {
+      button.remove()
+    })
+
+    const pending = click({ selector: "#apply" }, page)
+    await page.advance(0)
+
+    expect(result(await pending).text).toBe("Apply now")
   })
 })
 
