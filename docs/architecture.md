@@ -18,7 +18,7 @@ Every command answers over the same path: content script or background API, then
 |---|---|---|
 | `version`, `ping` | extension version and feature list, a timestamp | none |
 | tabs, windows, groups, `navigate`, `getActiveTab`, `getTabs`, `listAllTabs` | urls, page titles, tab, window and group ids | `browsingActivity` |
-| `getContent`, `getAccessibilitySnapshot`, `getElementInfo`, `getPageState`, `waitFor` | text, HTML, link and form structure of the page, including values of visible fields | `websiteContent` |
+| `getContent`, `getAccessibilitySnapshot`, `getElementInfo`, `getPageState`, `waitFor` | text, HTML, link and form structure of the page, including values of visible fields; `getContent` reports the browser's `innerText` of the root with its documented fallbacks (raw `textContent` for a root without layout boxes and for non-HTML roots), the other readers report `textContent` | `websiteContent` |
 | `screenshot` | a rendered image of the page, which can hold anything the page shows | `websiteContent` |
 | `getConsoleLogs`, `getNetworkRequests` | console output, request and response metadata, request urls with credential-looking query values already stripped, response headers redacted by default | `websiteContent` |
 | `click`, `type`, `pressKey`, `scroll`, `handleConsent` | what was clicked, typed, pressed or scrolled and the resulting element state | `websiteActivity` |

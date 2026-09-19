@@ -532,3 +532,48 @@ describe("source archive and reviewer material", () => {
     },
   )
 })
+
+describe("visible text documentation", () => {
+  test.skipIf(root === undefined)(
+    "commands.md describes the getContent extraction contract and the tail cut",
+    async () => {
+      const text = await readRootDoc(join("docs", "commands.md"))
+      for (const phrase of [
+        "--tail",
+        "characters before this point",
+        "tailLength",
+        "hidden",
+        "display: contents",
+      ]) {
+        expect(text).toContain(phrase)
+      }
+      expect(text).not.toContain("text is `textContent` trimmed")
+    },
+  )
+
+  test.skipIf(root === undefined)(
+    "commands.md states the click text source and the alternatives policy",
+    async () => {
+      const text = await readRootDoc(join("docs", "commands.md"))
+      for (const phrase of [
+        "visible text captured before the click",
+        "rendered elements only",
+        "`data-testid`",
+      ]) {
+        expect(text).toContain(phrase)
+      }
+    },
+  )
+
+  test.skipIf(root === undefined)(
+    "the architecture data matrix names innerText as the getContent source",
+    async () => {
+      const text = await readRootDoc(join("docs", "architecture.md"))
+      const row = text.split("\n").find((line) => line.startsWith("| `getContent`,"))
+      expect(row).toContain("`innerText`")
+      expect(row).toContain("documented fallbacks")
+      // the contract is the browser's getter, not a rendered-text guarantee of our own
+      expect(text).not.toContain("rendered text")
+    },
+  )
+})
