@@ -7,9 +7,16 @@ import { capturedErrors } from "./console"
 import type { Page } from "./page"
 import { safeQuerySelector } from "./selector"
 import { buildElementNotFoundError, buildTextNotFoundError } from "./suggest"
-import { ambiguousText, describeTarget, findByText, resolveTarget, scopeRoot } from "./text-target"
+import {
+  ambiguousText,
+  describeTarget,
+  findByText,
+  rawText,
+  resolveTarget,
+  scopeRoot,
+} from "./text-target"
 import { SelectorUnavailable, uniqueSelector } from "./unique-selector"
-import { isRendered } from "./visibility"
+import { isDisplayNone, isRendered } from "./visibility"
 
 const truncationSuffix = "\n\n[... truncated, use selector for specific content]"
 
@@ -67,20 +74,41 @@ function truncateText(text: string, limit: number): { text: string; truncated: b
   return { text: text.slice(0, limit) + truncationSuffix, truncated: true }
 }
 
+/** The extraction result of one root: what `getContent` reports as text. */
+interface Content {
+  text: string
+  hidden: boolean
+}
+
+/**
+ * What `getContent` extracts: the browser's `innerText` trimmed at both ends,
+ * every internal run of whitespace kept. A `display: none` subtree is reported
+ * as hidden and never read, because there `innerText` falls back to the raw
+ * `textContent` the caller did not ask for. Every other root is read as it is,
+ * including the browser's own fallbacks for a root without layout boxes.
+ */
+function contentText(page: Page, element: Element): Content {
+  if (isDisplayNone(page, element)) {
+    return { text: "", hidden: true }
+  }
+  return { text: rawText(element).text.trim(), hidden: false }
+}
+
 export function getContent(params: JsonObject, page: Page): JsonValue {
   const includeHtml = params.includeHtml === true
   const maxLength = numberParam(params.maxLength, DEFAULT_MAX_LENGTH)
 
   if (params.selector) {
     const element = requireElement(page, params.selector)
-    const raw = textOf(element)
-    const { text, truncated } = truncateText(raw, maxLength)
+    const raw = contentText(page, element)
+    const { text, truncated } = truncateText(raw.text, maxLength)
     const result: JsonObject = {
       selector: params.selector,
       text,
       tagName: element.tagName.toLowerCase(),
-      textLength: raw.length,
+      textLength: raw.text.length,
       truncated,
+      hidden: raw.hidden,
     }
     if (includeHtml) {
       result.html = element.innerHTML
@@ -89,14 +117,16 @@ export function getContent(params: JsonObject, page: Page): JsonValue {
   }
 
   const body = page.document.body
-  const raw = body === null ? "" : textOf(body)
-  const { text, truncated } = truncateText(raw, maxLength)
+  // a document without a body renders nothing at all
+  const raw: Content = body === null ? { text: "", hidden: true } : contentText(page, body)
+  const { text, truncated } = truncateText(raw.text, maxLength)
   const result: JsonObject = {
     url: page.window.location.href,
     title: page.document.title,
     text,
-    textLength: raw.length,
+    textLength: raw.text.length,
     truncated,
+    hidden: raw.hidden,
   }
   if (includeHtml) {
     result.html = page.document.documentElement.outerHTML

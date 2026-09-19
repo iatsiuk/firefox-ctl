@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import type { Page } from "../src/content/page"
 import {
@@ -73,6 +73,54 @@ function showAll(hidden: string[] = []): void {
   }
 }
 
+interface TextReads {
+  innerText: number
+  textContent: number
+}
+
+/** Own properties restored after each test, so a seam on `body` never leaks. */
+const restores: (() => void)[] = []
+
+function installGetter(element: Element, key: string, get: () => unknown): void {
+  const previous = Object.getOwnPropertyDescriptor(element, key)
+  Object.defineProperty(element, key, { configurable: true, get })
+  restores.push(() => {
+    if (previous === undefined) {
+      Reflect.deleteProperty(element, key)
+    } else {
+      Object.defineProperty(element, key, previous)
+    }
+  })
+}
+
+/** Counts reads of both text getters on a real element, answering `values`. */
+function textSeam(
+  element: Element,
+  values: { innerText?: string; textContent?: string },
+): TextReads {
+  const reads: TextReads = { innerText: 0, textContent: 0 }
+  const rendered = (element as Partial<HTMLElement>).innerText
+  const content = element.textContent
+  installGetter(element, "innerText", () => {
+    reads.innerText += 1
+    return values.innerText ?? rendered
+  })
+  installGetter(element, "textContent", () => {
+    reads.textContent += 1
+    return values.textContent ?? content
+  })
+  return reads
+}
+
+/** Getters that fail the test when the extraction reads the element at all. */
+function forbidText(element: Element): void {
+  for (const key of ["innerText", "textContent"]) {
+    installGetter(element, key, () => {
+      throw new Error(`unexpected ${key} read`)
+    })
+  }
+}
+
 function fixturePage(): Page {
   document.title = "Fixture page"
   document.body.innerHTML = FIXTURE_HTML
@@ -109,7 +157,16 @@ beforeEach(() => {
   document.title = ""
 })
 
+afterEach(() => {
+  while (restores.length > 0) {
+    restores.pop()?.()
+  }
+})
+
 describe("getContent", () => {
+  // the pinned text is happy-dom's `innerText`, a harness value: it has no
+  // layout, so it keeps the invisible "Hidden" link Firefox would drop, and it
+  // inserts no `<br>` separators
   test("describes the whole page", () => {
     expect(getContent({}, fixturePage())).toEqual(contentFixture)
   })
@@ -121,7 +178,148 @@ describe("getContent", () => {
       tagName: "p",
       textLength: 11,
       truncated: false,
+      hidden: false,
     })
+  })
+
+  test("reads innerText once and never textContent for an element", () => {
+    const page = fixturePage()
+    const reads = textSeam(el("#intro"), { innerText: "  Total\n\n  Apply now  \n" })
+
+    expect(getContent({ selector: "#intro" }, page)).toEqual({
+      selector: "#intro",
+      // trimmed at both ends, every internal run of whitespace kept
+      text: "Total\n\n  Apply now",
+      tagName: "p",
+      textLength: 18,
+      truncated: false,
+      hidden: false,
+    })
+    expect(reads).toEqual({ innerText: 1, textContent: 0 })
+  })
+
+  test("reads innerText once and never textContent for the page", () => {
+    const page = fixturePage()
+    const reads = textSeam(document.body, { innerText: "  Total\n\n  Apply now  \n" })
+
+    expect(getContent({}, page)).toEqual({
+      url: "https://example.com/fixture",
+      title: "Fixture page",
+      text: "Total\n\n  Apply now",
+      textLength: 18,
+      truncated: false,
+      hidden: false,
+    })
+    expect(reads).toEqual({ innerText: 1, textContent: 0 })
+  })
+
+  test("drops the text of an inline script, which textContent keeps", () => {
+    const page = fixturePage()
+    el("main").insertAdjacentHTML("beforeend", '<div id="box">Hi<script>var x=1</script></div>')
+
+    expect(el("#box").textContent).toBe("Hivar x=1")
+    expect(getContent({ selector: "#box" }, page)).toMatchObject({
+      text: "Hi",
+      textLength: 2,
+      hidden: false,
+    })
+  })
+
+  test("answers textContent for a non-HTML root", () => {
+    const page = fixturePage()
+    el("main").insertAdjacentHTML(
+      "beforeend",
+      '<svg id="chart"><title>  Chart  </title><text>Q1</text></svg>',
+    )
+
+    // SVG never had innerText, so hidden SVG descendants are not filtered here
+    expect(getContent({ selector: "#chart" }, page)).toEqual({
+      selector: "#chart",
+      text: "Chart  Q1",
+      tagName: "svg",
+      textLength: 9,
+      truncated: false,
+      hidden: false,
+    })
+  })
+
+  test("reports a display: none root as hidden without reading it", () => {
+    const page = fixturePage()
+    el("main").insertAdjacentHTML("beforeend", '<section id="panel">Secret</section>')
+    stubStyle(el("#panel"), { display: "none" })
+    forbidText(el("#panel"))
+
+    expect(getContent({ selector: "#panel" }, page)).toEqual({
+      selector: "#panel",
+      text: "",
+      tagName: "section",
+      textLength: 0,
+      truncated: false,
+      hidden: true,
+    })
+  })
+
+  test("reports a root under a display: none ancestor as hidden", () => {
+    const page = fixturePage()
+    el("main").insertAdjacentHTML(
+      "beforeend",
+      '<section id="panel"><p id="deep">Secret</p></section>',
+    )
+    stubStyle(el("#panel"), { display: "none" })
+    forbidText(el("#deep"))
+
+    expect(getContent({ selector: "#deep" }, page)).toMatchObject({
+      text: "",
+      textLength: 0,
+      truncated: false,
+      hidden: true,
+    })
+  })
+
+  test("still answers the full html of a hidden root", () => {
+    const page = fixturePage()
+    el("main").insertAdjacentHTML("beforeend", '<section id="panel"><b>Secret</b></section>')
+    stubStyle(el("#panel"), { display: "none" })
+
+    expect(getContent({ selector: "#panel", includeHtml: true }, page)).toMatchObject({
+      text: "",
+      hidden: true,
+      html: "<b>Secret</b>",
+    })
+  })
+
+  test("a whitespace-only root is empty but not hidden", () => {
+    const page = fixturePage()
+    el("main").insertAdjacentHTML("beforeend", '<div id="blank">   </div><div id="void"></div>')
+
+    expect(getContent({ selector: "#blank" }, page)).toMatchObject({
+      text: "",
+      textLength: 0,
+      hidden: false,
+    })
+    expect(getContent({ selector: "#void" }, page)).toMatchObject({
+      text: "",
+      textLength: 0,
+      hidden: false,
+    })
+  })
+
+  test("a document without a body answers hidden in the page branch", () => {
+    const page = fixturePage()
+    const body = document.body
+    body.remove()
+    try {
+      expect(getContent({}, page)).toEqual({
+        url: "https://example.com/fixture",
+        title: "Fixture page",
+        text: "",
+        textLength: 0,
+        truncated: false,
+        hidden: true,
+      })
+    } finally {
+      document.documentElement.appendChild(body)
+    }
   })
 
   test("includes inner HTML for an element and outer HTML for the page", () => {
@@ -139,8 +337,9 @@ describe("getContent", () => {
       url: "https://example.com/fixture",
       title: "Fixture page",
       text: "Fixture\n\n[... truncated, use selector for specific content]",
-      textLength: 41,
+      textLength: 44,
       truncated: true,
+      hidden: false,
     })
   })
 

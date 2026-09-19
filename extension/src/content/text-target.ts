@@ -28,14 +28,33 @@ export function normaliseText(value: string): string {
   return value.replace(/[\s ]+/g, " ").trim()
 }
 
+/** The raw text an element carries, and which getter answered it. */
+export interface RawText {
+  text: string
+  source: "innerText" | "textContent"
+}
+
+/**
+ * One read of `innerText`, the text the browser renders, falling back to
+ * `textContent` for the elements that never had the getter (SVG and the other
+ * non-HTML namespaces). The read happens once and the value is kept: a boolean
+ * probe followed by a second read could answer differently.
+ */
+export function rawText(element: Element): RawText {
+  const rendered = (element as Partial<HTMLElement>).innerText
+  if (typeof rendered === "string") {
+    return { text: rendered, source: "innerText" }
+  }
+  return { text: element.textContent ?? "", source: "textContent" }
+}
+
 /**
  * The text the element renders, normalised. `innerText` already drops hidden
  * descendants and turns `<br>` and block boundaries into separators, so a
  * `textContent` prefilter would reject valid matches and is never used.
  */
 export function visibleText(element: Element): string {
-  const rendered = (element as Partial<HTMLElement>).innerText
-  return normaliseText(typeof rendered === "string" ? rendered : (element.textContent ?? ""))
+  return normaliseText(rawText(element).text)
 }
 
 function inExcludedSubtree(root: Element, element: Element): boolean {

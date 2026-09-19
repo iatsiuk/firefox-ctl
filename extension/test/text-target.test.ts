@@ -5,6 +5,7 @@ import {
   ACTIONABLE,
   findByText,
   normaliseText,
+  rawText,
   resolveTarget,
   scopeRoot,
   TEXT_LIMIT,
@@ -63,6 +64,34 @@ function seamText(element: Element, value?: string): Seam {
   return seam
 }
 
+interface TextReads {
+  innerText: number
+  textContent: number
+}
+
+/** A proxy counting reads of both text getters and answering the given values. */
+function proxyBoth(
+  element: Element,
+  values: { innerText: string | undefined; textContent?: string },
+): { proxy: Element; reads: TextReads } {
+  const reads: TextReads = { innerText: 0, textContent: 0 }
+  const proxy = new Proxy(element, {
+    get(target, key: string | symbol): unknown {
+      if (key === "innerText") {
+        reads.innerText += 1
+        return values.innerText
+      }
+      if (key === "textContent") {
+        reads.textContent += 1
+        return values.textContent ?? Reflect.get(target, key)
+      }
+      const found = Reflect.get(target, key) as unknown
+      return typeof found === "function" ? found.bind(target) : found
+    },
+  }) as Element
+  return { proxy, reads }
+}
+
 /** The seam the plan asks for on `visibleText`: a proxy answering `innerText`. */
 function proxyText(element: Element, value: string): { proxy: Element; seam: Seam } {
   const seam: Seam = { reads: 0 }
@@ -93,6 +122,38 @@ describe("normaliseText", () => {
 
   test("preserves case", () => {
     expect(normaliseText(" ApPly NOW ")).toBe("ApPly NOW")
+  })
+})
+
+describe("rawText", () => {
+  test("answers innerText untouched, with its source, reading it once", () => {
+    mount('<p id="p">Hello</p>')
+    const { proxy, reads } = proxyBoth(el("#p"), { innerText: "  Hello\n\n world  " })
+    expect(rawText(proxy)).toEqual({ text: "  Hello\n\n world  ", source: "innerText" })
+    expect(reads).toEqual({ innerText: 1, textContent: 0 })
+  })
+
+  test("reads textContent only when innerText is not a string", () => {
+    mount('<p id="p">Hello</p>')
+    const { proxy, reads } = proxyBoth(el("#p"), {
+      innerText: undefined,
+      textContent: "  raw  text ",
+    })
+    expect(rawText(proxy)).toEqual({ text: "  raw  text ", source: "textContent" })
+    expect(reads).toEqual({ innerText: 1, textContent: 1 })
+  })
+
+  test("answers an empty string when the element carries neither", () => {
+    mount('<svg id="sv"></svg>')
+    expect(rawText(el("#sv"))).toEqual({ text: "", source: "textContent" })
+  })
+
+  test("is the reader behind visibleText", () => {
+    mount('<button id="b">Applynow</button>')
+    const { proxy, reads } = proxyBoth(el("#b"), { innerText: " Apply \n now " })
+    expect(visibleText(proxy)).toBe(normaliseText(rawText(proxy).text))
+    expect(visibleText(proxy)).toBe("Apply now")
+    expect(reads.textContent).toBe(0)
   })
 })
 

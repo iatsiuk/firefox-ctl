@@ -1,7 +1,8 @@
 {
   "url": "https://example.com/fixture",
   "title": "Fixture page",
-  "text": "Fixture pageDocsHiddenHello worldUserSend",
-  "textLength": 41,
-  "truncated": false
+  "text": "Fixture page\nDocsHidden\nHello world\nUserSend",
+  "textLength": 44,
+  "truncated": false,
+  "hidden": false
 }
