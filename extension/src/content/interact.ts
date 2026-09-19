@@ -5,14 +5,20 @@ import type { JsonObject, JsonValue } from "../protocol"
 import type { Page } from "./page"
 import {
   autoWaitTimeout,
+  pollUntil,
   safeQuerySelector,
   smartQuerySelector,
   validateSelector,
 } from "./selector"
-import { buildElementNotFoundError } from "./suggest"
+import { buildElementNotFoundError, buildTextNotFoundError } from "./suggest"
+import { findByText, resolveTarget, scopeRoot } from "./text-target"
 import { nextFrame } from "./timing"
+import { SelectorUnavailable, uniqueSelector } from "./unique-selector"
 
 const CLICK_TEXT_LIMIT = 100
+
+/** Candidates named in an `AMBIGUOUS_TEXT` message before the count takes over. */
+const AMBIGUOUS_LIMIT = 5
 
 /** The `code` map; anything else keeps the key name or becomes `Key<X>`. */
 const keyCodes: Record<string, string> = {
@@ -77,14 +83,75 @@ async function requireElement(
   return { selector, element: element as HTMLElement }
 }
 
-export async function click(params: JsonObject, page: Page): Promise<JsonValue> {
-  const { selector, element } = await requireElement(params, page, "click")
+/** A verified selector for the element, or `null` when nothing describes it. */
+function describeTarget(page: Page, element: Element): string | null {
+  try {
+    return uniqueSelector(page, element)
+  } catch (error) {
+    if (error instanceof SelectorUnavailable) {
+      return null
+    }
+    throw error
+  }
+}
 
-  element.scrollIntoView({ behavior: "smooth", block: "center" })
-  // let the smooth scroll settle before the click lands
-  await nextFrame(page)
-  element.click()
+/** How a candidate is named in the ambiguity message. */
+function nameCandidate(page: Page, element: Element): string {
+  return describeTarget(page, element) ?? `<${element.tagName.toLowerCase()} (no unique selector)>`
+}
 
+function ambiguousText(page: Page, text: string, matches: Element[]): Error {
+  const shown = matches.slice(0, AMBIGUOUS_LIMIT).map((match) => nameCandidate(page, match))
+  const rest = matches.length - shown.length
+  const list = rest > 0 ? [...shown, `and ${rest} more`] : shown
+  return new Error(
+    `AMBIGUOUS_TEXT: "${text}" matches ${matches.length} elements: ${list.join(", ")}`,
+  )
+}
+
+/**
+ * The one actionable element rendering `text`, scrolled into view and still
+ * connected. The scope is resolved again at every probe, so a re-rendered
+ * dialog is followed; two or more targets fail at once; a target that detaches
+ * during the frame wait sends the search back to the poll loop.
+ */
+async function requireTextTarget(
+  params: JsonObject,
+  page: Page,
+  text: string,
+  scope: string | null,
+): Promise<HTMLElement> {
+  const autoWait = boolParam(params.autoWait, true)
+  const deadline = page.now() + numberParam(params.waitTimeout, autoWaitTimeout)
+  const probe = (): HTMLElement | null => {
+    const matches = findByText(page, text, scopeRoot(page, scope), "actionable")
+    if (matches.length > 1) {
+      throw ambiguousText(page, text, matches)
+    }
+    return (matches[0] as HTMLElement) ?? null
+  }
+
+  for (;;) {
+    const element = await pollUntil(page, probe, {
+      autoWait,
+      timeout: Math.max(deadline - page.now(), 0),
+    })
+    if (element === null) {
+      throw buildTextNotFoundError(page, text)
+    }
+    element.scrollIntoView({ behavior: "smooth", block: "center" })
+    // let the smooth scroll settle before the click lands
+    await nextFrame(page)
+    if (element.isConnected) {
+      return element
+    }
+    if (!autoWait || page.now() >= deadline) {
+      throw buildTextNotFoundError(page, text)
+    }
+  }
+}
+
+function clickResult(element: HTMLElement, selector: string | null, matchedBy: string): JsonValue {
   return {
     selector,
     clicked: true,
@@ -92,7 +159,28 @@ export async function click(params: JsonObject, page: Page): Promise<JsonValue> 
     text: element.textContent?.trim().slice(0, CLICK_TEXT_LIMIT) || "",
     id: element.id || null,
     className: element.className || null,
+    matchedBy,
   }
+}
+
+export async function click(params: JsonObject, page: Page): Promise<JsonValue> {
+  const target = resolveTarget(page, params)
+
+  if (target.mode === "selector") {
+    const { selector, element } = await requireElement(params, page, "click")
+    element.scrollIntoView({ behavior: "smooth", block: "center" })
+    // let the smooth scroll settle before the click lands
+    await nextFrame(page)
+    element.click()
+    return clickResult(element, selector, "selector")
+  }
+
+  const element = await requireTextTarget(params, page, target.text, target.scope)
+  // generated before the click: a click that removes its own element or starts
+  // a navigation must not be reported as failed
+  const selector = describeTarget(page, element)
+  element.click()
+  return clickResult(element, selector, "text")
 }
 
 function setInputValue(page: Page, element: Editable, value: string): void {

@@ -35,6 +35,7 @@
   "paramsNotObject": "params must be an object",
   "elementNotFound": "Element not found: <selector>",
   "elementNotFoundText": "Element not found: text \"<text>\"",
+  "ambiguousText": "AMBIGUOUS_TEXT: \"Apply\" matches 2 elements: #a, #b",
   "notFoundSuggestions": "Suggested alternatives:",
   "notFoundContext": "Page context:",
   "notFoundIframe": "  Warning: Inside iframe - element may be in parent frame",

@@ -38,19 +38,18 @@ export function safeQuerySelector(page: Page, selector: unknown): Element | null
 }
 
 /**
- * Queries once and, unless auto-wait is off, keeps polling until the element
- * appears or the timeout passes.
+ * Probes once and, unless auto-wait is off, keeps probing every 100 ms until
+ * the probe answers or the timeout passes. A probe that throws ends the wait.
  */
-export async function smartQuerySelector(
+export async function pollUntil<T>(
   page: Page,
-  selector: unknown,
+  probe: () => T | null,
   options: QueryOptions = {},
-): Promise<Element | null> {
+): Promise<T | null> {
   const { autoWait = true, timeout = autoWaitTimeout } = options
-  const valid = validateSelector(page, selector)
 
-  const immediate = page.document.querySelector(valid)
-  if (immediate) {
+  const immediate = probe()
+  if (immediate !== null) {
     return immediate
   }
   if (!autoWait) {
@@ -60,11 +59,24 @@ export async function smartQuerySelector(
   const start = page.now()
   while (page.now() - start < timeout) {
     await nextFrame(page)
-    const element = page.document.querySelector(valid)
-    if (element) {
-      return element
+    const found = probe()
+    if (found !== null) {
+      return found
     }
     await sleep(page, pollInterval)
   }
   return null
+}
+
+/**
+ * Queries once and, unless auto-wait is off, keeps polling until the element
+ * appears or the timeout passes.
+ */
+export async function smartQuerySelector(
+  page: Page,
+  selector: unknown,
+  options: QueryOptions = {},
+): Promise<Element | null> {
+  const valid = validateSelector(page, selector)
+  return pollUntil(page, () => page.document.querySelector(valid), options)
 }

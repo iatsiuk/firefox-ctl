@@ -201,6 +201,7 @@ describe("ExtensionError", () => {
       "COMMAND_TIMEOUT",
       "SCREENSHOT_TOO_LARGE",
       "EVALUATE_DISABLED",
+      "AMBIGUOUS_TEXT",
     ])
     for (const code of ERROR_CODES) {
       expect(new ExtensionError(code, "text").message).toBe(`${code}: text`)

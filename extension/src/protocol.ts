@@ -121,6 +121,7 @@ export const ERROR_CODES = [
   "COMMAND_TIMEOUT",
   "SCREENSHOT_TOO_LARGE",
   "EVALUATE_DISABLED",
+  "AMBIGUOUS_TEXT",
 ] as const
 
 export type ErrorCode = (typeof ERROR_CODES)[number]

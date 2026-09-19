@@ -15,6 +15,7 @@ import { startPage } from "../src/page"
 import type { ExtensionResponse, HostCommand, JsonObject } from "../src/protocol"
 import { ERROR_CODES } from "../src/protocol"
 import { writeEvaluateEnabled } from "../src/settings"
+import { stubRect } from "./dom"
 import { FakeBrowser, FakeEnvironment, type FakePort } from "./fakes"
 import errors from "./fixtures/errors.json"
 
@@ -339,6 +340,8 @@ const FIXTURE_HTML = `
     <p>Fixture page for the acceptance run.</p>
     <a href="https://example.com/docs">Docs</a>
     <button id="go" type="button">Go</button>
+    <button id="twice-a" type="button">Go twice</button>
+    <button id="twice-b" type="button">Go twice</button>
     <label for="q">Query</label>
     <input id="q" name="q" type="text" placeholder="Search">
     <img src="/logo.png" alt="Logo" width="40" height="40">
@@ -353,6 +356,11 @@ const FIXTURE_HTML = `
 function contentTab(browser: FakeBrowser): void {
   document.title = "Fixture page"
   document.body.innerHTML = FIXTURE_HTML
+  // happy-dom has no layout and the text resolver walks from the root, so
+  // `html`, `body` and every fixture element need a box to count as visible
+  for (const target of document.querySelectorAll("*")) {
+    stubRect(target, { width: 100, height: 20 })
+  }
   const contentBrowser = new FakeBrowser()
   startPage(contentBrowser, realPage())
   browser.sendMessageHandler = (_tabId, message) => contentBrowser.emitRuntimeMessage(message)
@@ -488,6 +496,37 @@ describe("page commands", () => {
     expect(result(await run(port, "evaluate", { expression: "missing.field" }))).toMatchObject({
       type: "error",
     })
+  })
+
+  test("click by text refuses an ambiguous label and presses a unique one", async () => {
+    const browser = userBrowser()
+    const { port } = session(browser)
+    contentTab(browser)
+    result(await run(port, "createWindow", { private: false }))
+
+    let twice = 0
+    for (const id of ["#twice-a", "#twice-b"]) {
+      ;(document.querySelector(id) as HTMLElement).addEventListener("click", () => {
+        twice++
+      })
+    }
+    const ambiguous = await failure(port, "click", { text: "Go twice" })
+    expect(ambiguous.slice(0, 45)).toBe('AMBIGUOUS_TEXT: "Go twice" matches 2 elements')
+    expect(twice).toBe(0)
+
+    let clicks = 0
+    ;(document.querySelector("#go") as HTMLElement).addEventListener("click", () => {
+      clicks++
+    })
+    expect(result(await run(port, "click", { text: "Go" }))).toMatchObject({
+      selector: "#go",
+      clicked: true,
+      tagName: "button",
+      text: "Go",
+      id: "go",
+      matchedBy: "text",
+    })
+    expect(clicks).toBe(1)
   })
 
   test("a refused action keeps the content script's message and diagnostics", async () => {
