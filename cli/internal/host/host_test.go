@@ -101,6 +101,7 @@ func (c *fakeClock) next(t *testing.T) *fakeTimer {
 
 type fixture struct {
 	t       *testing.T
+	srv     *Server
 	stopped bool
 	sock    string
 	ext     *extensionSide
@@ -218,6 +219,7 @@ func start(t *testing.T, opt options) *fixture {
 
 	f := &fixture{
 		t:      t,
+		srv:    srv,
 		sock:   sock,
 		ext:    &extensionSide{in: nativemsg.NewReader(stdoutR), out: nativemsg.NewWriter(stdinW)},
 		clock:  clock,
@@ -696,9 +698,30 @@ func (c *client) refuse(t *testing.T) {
 	}
 }
 
+// awaitEOF reads until the host's CloseWrite shows through, which is the
+// first observable sign that the drain has started.
+func (c *client) awaitEOF(t *testing.T) {
+	t.Helper()
+
+	_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.r.ReadBytes('\n'); !errors.Is(err, io.EOF) {
+		t.Fatalf("read after refusal = %v, want EOF", err)
+	}
+}
+
+// trackedConns counts the clients the server still holds.
+func (f *fixture) trackedConns() int {
+	f.srv.mu.Lock()
+	defer f.srv.mu.Unlock()
+
+	return len(f.srv.conns)
+}
+
 // TestServerDrainReleasesSlotAtDeadline covers a refused client that never
-// hangs up: once drainTimeout passes its socket is closed and its connection
-// slot goes back to the pool, so the next client is served.
+// hangs up: once drainTimeout passes its socket is closed, it leaves the
+// connection table and its slot goes back to the pool, so the next client is
+// served. The stopwatch starts before the oversize request is sent, so the
+// lower bound can never be undercut by a late read of the refusal.
 func TestServerDrainReleasesSlotAtDeadline(t *testing.T) {
 	t.Parallel()
 
@@ -706,9 +729,9 @@ func TestServerDrainReleasesSlotAtDeadline(t *testing.T) {
 
 	f := start(t, options{maxRequestSize: 256, maxConns: 1, drainTimeout: drain})
 	stuck := f.dial()
-	stuck.refuse(t)
 
-	refused := time.Now()
+	sent := time.Now()
+	stuck.refuse(t)
 
 	next := f.dial()
 	next.sendCommand(t, "version", nil)
@@ -717,33 +740,46 @@ func TestServerDrainReleasesSlotAtDeadline(t *testing.T) {
 		t.Errorf("command = %q, want version once the drained slot freed", cmd.Command)
 	}
 
-	if waited := time.Since(refused); waited < drain {
+	waited := time.Since(sent)
+	if waited < drain {
 		t.Errorf("slot freed after %s, before the %s drain deadline", waited, drain)
 	}
 
-	_ = stuck.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, err := stuck.r.ReadBytes('\n'); err == nil {
-		t.Error("refused client still readable after the drain deadline, want EOF or reset")
+	if waited > 10*drain {
+		t.Errorf("slot freed after %s, want about %s: the configured drain was not applied", waited, drain)
 	}
 
-	if !strings.Contains(f.logs.String(), "request above 256 bytes, closing client") {
-		t.Errorf("logs = %q, want the oversize refusal logged", f.logs.String())
+	if n := f.trackedConns(); n != 1 {
+		t.Errorf("tracked connections = %d after the drain, want 1 (the refused client removed)", n)
+	}
+
+	_ = stuck.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	_, err := stuck.conn.Write([]byte("late\n"))
+
+	switch {
+	case err == nil:
+		t.Error("write to the refused client succeeded after the drain deadline, want a closed socket")
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		t.Errorf("write to the refused client timed out, want a closed socket: %v", err)
 	}
 }
 
 // TestServerDrainDeadlineIsAbsolute covers a refused client that keeps
 // sending: incoming bytes must not push the deadline back, so the socket is
-// closed at about drainTimeout even though data never stops arriving.
+// closed at about drainTimeout even though data never stops arriving. The
+// bound is far below the one-second production default, so a drain that
+// ignores the option fails here.
 func TestServerDrainDeadlineIsAbsolute(t *testing.T) {
 	t.Parallel()
 
-	const drain = 100 * time.Millisecond
+	const drain = 50 * time.Millisecond
 
 	f := start(t, options{maxRequestSize: 256, drainTimeout: drain})
 	c := f.dial()
+
+	sent := time.Now()
 	c.refuse(t)
 
-	refused := time.Now()
 	chunk := []byte(strings.Repeat("y", 4096))
 
 	var closedAfter time.Duration
@@ -751,12 +787,12 @@ func TestServerDrainDeadlineIsAbsolute(t *testing.T) {
 	for {
 		_ = c.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 		if _, err := c.conn.Write(chunk); err != nil {
-			closedAfter = time.Since(refused)
+			closedAfter = time.Since(sent)
 
 			break
 		}
 
-		if time.Since(refused) > 3*time.Second {
+		if time.Since(sent) > 3*time.Second {
 			t.Fatal("writes still accepted 3 s after the refusal; the drain deadline was extended")
 		}
 
@@ -764,19 +800,21 @@ func TestServerDrainDeadlineIsAbsolute(t *testing.T) {
 	}
 
 	if closedAfter > 10*drain {
-		t.Errorf("socket closed %s after the refusal, want about %s: the deadline was extended by the stream", closedAfter, drain)
+		t.Errorf("socket closed %s after the request, want about %s: the deadline was extended by the stream", closedAfter, drain)
 	}
 }
 
 // TestServerCloseInterruptsDrain covers shutdown while a drain is in flight:
 // closing the clients must interrupt the discard copy so Run returns at once
-// rather than after the full drain deadline.
+// rather than after the full drain deadline. The EOF from CloseWrite is
+// awaited first, so the cancel lands inside the drain, not before it.
 func TestServerCloseInterruptsDrain(t *testing.T) {
 	t.Parallel()
 
 	f := start(t, options{maxRequestSize: 256, drainTimeout: 30 * time.Second})
 	c := f.dial()
 	c.refuse(t)
+	c.awaitEOF(t)
 
 	started := time.Now()
 	f.cancel()
@@ -787,6 +825,34 @@ func TestServerCloseInterruptsDrain(t *testing.T) {
 
 	if took := time.Since(started); took > time.Second {
 		t.Errorf("Run returned after %s, want well under the 30 s drain deadline", took)
+	}
+
+	if n := f.trackedConns(); n != 0 {
+		t.Errorf("tracked connections = %d after shutdown, want 0", n)
+	}
+}
+
+func TestNewServerDrainTimeout(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts *Options
+		want time.Duration
+	}{
+		{name: "nil options", opts: nil, want: DefaultDrainTimeout},
+		{name: "empty options", opts: &Options{}, want: DefaultDrainTimeout},
+		{name: "custom", opts: &Options{DrainTimeout: 25 * time.Millisecond}, want: 25 * time.Millisecond},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := NewServer(tc.opts).drainTimeout; got != tc.want {
+				t.Errorf("drainTimeout = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 
