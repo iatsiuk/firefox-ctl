@@ -68,6 +68,8 @@ message continues with `Suggested alternatives:` (up to five, each with a reason
 its value fails the same way: `text is required` for `type`, `key is required` for
 `pressKey`, `expression is required` for `evaluate`.
 
+### Text targeting
+
 `click` and `getElementInfo` can name their target by the text a user reads instead of by a
 selector: `selector` and `text` are mutually exclusive, by presence rather than by value, so a
 call carrying both fails with `selector and text are mutually exclusive` and a call carrying

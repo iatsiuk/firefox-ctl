@@ -341,6 +341,52 @@ describe("click by text", () => {
     expect(clicks()).toBe(0)
   })
 
+  test("fails at once when a target detaches during the frame wait with autoWait off", async () => {
+    const page = mount('<button id="apply">Apply</button>')
+    const button = el("#apply")
+    const clicks = counter(button)
+    Object.defineProperty(button, "scrollIntoView", {
+      configurable: true,
+      value: () => {
+        button.remove()
+      },
+    })
+
+    const settled = rejection(click({ text: "Apply", autoWait: false }, page))
+    await page.advance(0)
+
+    expect((await settled).message).toContain(errors.elementNotFoundText.replace("<text>", "Apply"))
+    expect(clicks()).toBe(0)
+  })
+
+  test("recovers when a fresh match replaces a target that detaches mid-wait", async () => {
+    const page = mount('<button id="apply">Apply</button>')
+    const original = el("#apply")
+    const originalClicks = counter(original)
+    let freshClicks = 0
+    Object.defineProperty(original, "scrollIntoView", {
+      configurable: true,
+      value: () => {
+        original.remove()
+        const fresh = document.createElement("button")
+        fresh.id = "fresh"
+        fresh.textContent = "Apply"
+        document.body.append(fresh)
+        showAll()
+        fresh.addEventListener("click", () => {
+          freshClicks++
+        })
+      },
+    })
+
+    const pending = click({ text: "Apply", waitTimeout: 2000 }, page)
+    await page.advance(2000)
+
+    expect(result(await pending).selector).toBe("#fresh")
+    expect(freshClicks).toBe(1)
+    expect(originalClicks()).toBe(0)
+  })
+
   test("waits for text that appears later", async () => {
     const page = mount("")
     let clicks = 0

@@ -162,44 +162,42 @@ function linkPass(page: Page, into: Collector, hint: string): void {
 /** Candidates for a selector that matched nothing, best-effort and deduplicated. */
 export function findSelectorAlternatives(page: Page, failedSelector: string): Alternative[] {
   const into = collector(page)
-  const add = (element: Element, reason: string): void => into.add(element, reason)
-  const full = (): boolean => into.full()
 
   const hint = textHint(failedSelector).toLowerCase()
 
   const idMatch = failedSelector.match(/#([a-zA-Z0-9_-]+)/)
-  if (idMatch?.[1] && !full()) {
+  if (idMatch?.[1] && !into.full()) {
     const wanted = idMatch[1].toLowerCase()
     for (const element of scan(page, "[id]")) {
       if (element.id.toLowerCase().includes(wanted)) {
-        add(element, "Similar ID found")
+        into.add(element, "Similar ID found")
       }
     }
   }
 
   const classMatch = failedSelector.match(/\.([a-zA-Z0-9_-]+)/)
-  if (classMatch?.[1] && !full()) {
+  if (classMatch?.[1] && !into.full()) {
     const wanted = classMatch[1].toLowerCase()
     for (const element of scan(page, "[class]")) {
       if (classTokens(element).some((name) => name.toLowerCase().includes(wanted))) {
-        add(element, "Similar class found")
+        into.add(element, "Similar class found")
       }
     }
   }
 
   const wantedName = attributeLiteral(failedSelector, "name")
-  if (wantedName && !full()) {
+  if (wantedName && !into.full()) {
     const fields = byAttributeValue(page, wantedName, fieldSelector, attributeOf("name"))
     for (const element of fields) {
-      add(element, "Similar input name found")
+      into.add(element, "Similar input name found")
     }
   }
 
   const wantedTestId = attributeLiteral(failedSelector, "data-testid")
-  if (wantedTestId && !full()) {
+  if (wantedTestId && !into.full()) {
     const tagged = byAttributeValue(page, wantedTestId, "[data-testid]", attributeOf("data-testid"))
     for (const element of tagged) {
-      add(element, "Similar data-testid found")
+      into.add(element, "Similar data-testid found")
     }
   }
 
@@ -207,7 +205,7 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
   buttonPass(page, into, hint, isButtonSelector)
   linkPass(page, into, hint)
 
-  if (hint && !full()) {
+  if (hint && !into.full()) {
     const labels = labelTexts(page)
     for (const element of scan(page, fieldSelector)) {
       const described = [
@@ -217,16 +215,16 @@ export function findSelectorAlternatives(page: Page, failedSelector: string): Al
       ]
       const matched = described.find((value) => value.toLowerCase().includes(hint))
       if (matched !== undefined) {
-        add(element, `Input: "${matched.slice(0, reasonTextLimit)}"`)
+        into.add(element, `Input: "${matched.slice(0, reasonTextLimit)}"`)
       }
     }
   }
 
-  if (hint && !full()) {
+  if (hint && !into.full()) {
     for (const element of scan(page, "[aria-label]")) {
       const label = element.getAttribute("aria-label") ?? ""
       if (label.toLowerCase().includes(hint)) {
-        add(element, `aria-label="${label}"`)
+        into.add(element, `aria-label="${label}"`)
       }
     }
   }
