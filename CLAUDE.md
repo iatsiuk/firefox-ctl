@@ -80,18 +80,21 @@ rejects a version it has already seen), run `make ext-sign`, then install the ne
 `JWT_ISSUER` and `JWT_SECRET` and is gitignored. That is the unlisted channel, for test
 builds.
 
-A release for the listed (public) channel is uploaded by hand instead, because the bundled
-`dist/` needs a source archive and a human review:
+A release for the listed (public) channel needs a source archive and a human review:
 
 1. `make ext-build`, `make ext-test`, `make ext-check`
 2. `make ext-xpi` and `make ext-source`, then `make ext-reproduce`, which rebuilds the source
    zip in a temp dir and fails if the three bundles differ from the xpi
 3. `bunx addons-linter extension/web-ext-artifacts/firefox-ctl-<version>.zip`: zero errors, and
    every remaining warning already justified in `docs/reviewer-notes.md`
-4. In the AMO developer hub, listed channel: upload the xpi, attach the source zip, paste
-   `docs/reviewer-notes.md` into the notes to reviewer, license MIT/X11, homepage
-   `https://github.com/iatsiuk/firefox-ctl`, privacy statement from the data matrix in
-   `docs/architecture.md`
+4. Submit with `bunx web-ext sign --channel listed --upload-source-code <source zip>
+   --amo-metadata <json>` from `extension/`, same `--ignore-files` list as `ext-sign`, keys from
+   `.env`. The metadata JSON is `{"version": {"approval_notes": "...", "release_notes":
+   {"en-US": "..."}}}`. AMO caps `approval_notes` at 3000 characters and rejects the whole
+   submission over it, so paste a delta since the previous version plus a pointer to
+   `docs/reviewer-notes.md` in the source zip, never the full file. License MIT/X11,
+   homepage `https://github.com/iatsiuk/firefox-ctl` and the privacy statement live on the
+   listing and need no resubmission
 
 The `make -C cli <target>` and `cd extension && bun <script>` forms still work; the root
 targets above only delegate to them.
