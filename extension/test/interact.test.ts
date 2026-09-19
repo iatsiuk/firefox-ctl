@@ -122,6 +122,19 @@ describe("click", () => {
   test("validates the selector", async () => {
     await expect(click({}, fakePage())).rejects.toThrow(errors.selectorRequired)
   })
+
+  // pinned before text targeting is wired in, so the selector branch keeps its
+  // messages once click grows a second way of naming a target
+  test("keeps the selector-mode messages", async () => {
+    await expect(click({ selector: "" }, fakePage())).rejects.toThrow(errors.selectorRequired)
+    await expect(click({ selector: "   " }, fakePage())).rejects.toThrow(errors.selectorEmpty)
+    await expect(click({ selector: `#${"a".repeat(1000)}` }, fakePage())).rejects.toThrow(
+      errors.selectorTooLong,
+    )
+    await expect(click({ selector: "button[click" }, fakePage())).rejects.toThrow(
+      errors.selectorInvalid.replace("<message>", ""),
+    )
+  })
 })
 
 describe("type", () => {

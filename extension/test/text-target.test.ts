@@ -1,8 +1,18 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 
 import type { Page } from "../src/content/page"
-import { ACTIONABLE, findByText, normaliseText, visibleText } from "../src/content/text-target"
+import {
+  ACTIONABLE,
+  findByText,
+  normaliseText,
+  resolveTarget,
+  scopeRoot,
+  TEXT_LIMIT,
+  visibleText,
+} from "../src/content/text-target"
+import type { JsonValue } from "../src/protocol"
 import { fakePage, stubRect, stubStyle } from "./dom"
+import errors from "./fixtures/errors.json"
 
 function el(selector: string): Element {
   const found = document.querySelector(selector)
@@ -300,5 +310,146 @@ describe("findByText cost", () => {
       ([selector]) => selector !== "#r7" && selector !== "#r99",
     )
     expect(boxed.every(([, seam]) => seam.reads === 1)).toBe(true)
+  })
+})
+
+describe("resolveTarget", () => {
+  const page = (): Page => {
+    document.body.innerHTML = ""
+    return fakePage()
+  }
+
+  test("answers selector mode with the raw value, unvalidated", () => {
+    expect(resolveTarget(page(), { selector: "#go" })).toEqual({
+      mode: "selector",
+      selector: "#go",
+    })
+    expect(resolveTarget(page(), { selector: "" })).toEqual({ mode: "selector", selector: "" })
+    expect(resolveTarget(page(), { selector: "div[raw" })).toEqual({
+      mode: "selector",
+      selector: "div[raw",
+    })
+  })
+
+  test("answers text mode with the normalised text and a null scope", () => {
+    expect(resolveTarget(page(), { text: "  Apply   now " })).toEqual({
+      mode: "text",
+      text: "Apply now",
+      scope: null,
+    })
+  })
+
+  test("answers text mode with the scope selector", () => {
+    expect(resolveTarget(page(), { text: "Apply", scope: "#dialog" })).toEqual({
+      mode: "text",
+      text: "Apply",
+      scope: "#dialog",
+    })
+  })
+
+  test("refuses selector and text together, by presence not truthiness", () => {
+    expect(() => resolveTarget(page(), { selector: "#go", text: "Apply" })).toThrow(
+      errors.targetExclusive,
+    )
+    expect(() => resolveTarget(page(), { selector: "", text: "Apply" })).toThrow(
+      errors.targetExclusive,
+    )
+    expect(() => resolveTarget(page(), { selector: "#go", text: "" })).toThrow(
+      errors.targetExclusive,
+    )
+  })
+
+  test("requires a selector when nothing identifies a target", () => {
+    expect(() => resolveTarget(page(), {})).toThrow(errors.selectorRequired)
+  })
+
+  test("refuses a scope without text", () => {
+    expect(() => resolveTarget(page(), { scope: "#dialog" })).toThrow(errors.scopeRequiresText)
+    expect(() => resolveTarget(page(), { selector: "#go", scope: "#dialog" })).toThrow(
+      errors.scopeRequiresText,
+    )
+  })
+
+  test("requires text to be a string", () => {
+    for (const text of [null, 1, true, [], {}] as JsonValue[]) {
+      expect(() => resolveTarget(page(), { text })).toThrow(errors.textNotString)
+    }
+  })
+
+  test("refuses text that is empty after normalisation", () => {
+    expect(() => resolveTarget(page(), { text: "" })).toThrow(errors.textEmpty)
+    expect(() => resolveTarget(page(), { text: " \t\n " })).toThrow(errors.textEmpty)
+  })
+
+  test("caps the raw text at the exported limit", () => {
+    expect(TEXT_LIMIT).toBe(500)
+    expect(() => resolveTarget(page(), { text: "a".repeat(TEXT_LIMIT + 1) })).toThrow(
+      errors.textTooLong,
+    )
+    expect(resolveTarget(page(), { text: "a".repeat(TEXT_LIMIT) })).toEqual({
+      mode: "text",
+      text: "a".repeat(TEXT_LIMIT),
+      scope: null,
+    })
+  })
+
+  test("requires the scope to be a string", () => {
+    for (const scope of [null, 1, true, [], {}] as JsonValue[]) {
+      expect(() => resolveTarget(page(), { text: "Apply", scope })).toThrow(errors.scopeNotString)
+    }
+  })
+
+  test("refuses an empty or whitespace-only scope before validating it", () => {
+    expect(() => resolveTarget(page(), { text: "Apply", scope: "" })).toThrow(errors.scopeEmpty)
+    expect(() => resolveTarget(page(), { text: "Apply", scope: "   " })).toThrow(errors.scopeEmpty)
+  })
+
+  // happy-dom memoises a selector string on the shared document, so an invalid
+  // selector throws only the first time it is parsed in the process: every
+  // suite pinning `selectorInvalid` uses a string of its own
+  test("validates the scope as a selector", () => {
+    expect(() => resolveTarget(page(), { text: "Apply", scope: `#${"a".repeat(1000)}` })).toThrow(
+      errors.selectorTooLong,
+    )
+    expect(() => resolveTarget(page(), { text: "Apply", scope: "div[scope" })).toThrow(
+      errors.selectorInvalid.replace("<message>", ""),
+    )
+  })
+
+  test("applies exclusivity, then scope-requires-text, then text, then scope", () => {
+    expect(() => resolveTarget(page(), { selector: "#go", text: 1, scope: 2 })).toThrow(
+      errors.targetExclusive,
+    )
+    expect(() => resolveTarget(page(), { selector: "#go", scope: 2 })).toThrow(
+      errors.scopeRequiresText,
+    )
+    expect(() => resolveTarget(page(), { text: 1, scope: 2 })).toThrow(errors.textNotString)
+    expect(() => resolveTarget(page(), { text: "Apply", scope: 2 })).toThrow(errors.scopeNotString)
+  })
+})
+
+describe("scopeRoot", () => {
+  test("answers the document element for a null scope", () => {
+    const page = mount('<div id="a">Apply</div>')
+    expect(scopeRoot(page, null)).toBe(document.documentElement)
+  })
+
+  test("answers the single element a scope selector matches", () => {
+    const page = mount('<div id="dialog"><button id="b">Apply</button></div>')
+    expect(scopeRoot(page, "#dialog")).toBe(el("#dialog"))
+  })
+
+  test("refuses a scope matching nothing", () => {
+    const page = mount('<div id="dialog">Apply</div>')
+    expect(() => scopeRoot(page, "#missing")).toThrow(
+      errors.scopeNotFound.replace("<scope>", "#missing"),
+    )
+  })
+
+  test("refuses a scope matching more than one element", () => {
+    const page = mount('<div class="row">a</div><div class="row">b</div>')
+    expect(() => scopeRoot(page, ".row")).toThrow(
+      errors.scopeAmbiguous.replace("<scope>", ".row").replace("<n>", "2"),
+    )
   })
 })

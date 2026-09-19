@@ -179,6 +179,20 @@ describe("getElementInfo", () => {
     expect(() => getElementInfo({}, fixturePage())).toThrow(errors.selectorRequired)
   })
 
+  // pinned before text targeting is wired in, so the selector branch keeps its
+  // messages once getElementInfo grows a second way of naming a target
+  test("keeps the selector-mode messages", () => {
+    const page = fixturePage()
+    expect(() => getElementInfo({ selector: "" }, page)).toThrow(errors.selectorRequired)
+    expect(() => getElementInfo({ selector: "   " }, page)).toThrow(errors.selectorEmpty)
+    expect(() => getElementInfo({ selector: `#${"a".repeat(1000)}` }, page)).toThrow(
+      errors.selectorTooLong,
+    )
+    expect(() => getElementInfo({ selector: "p[info" }, page)).toThrow(
+      errors.selectorInvalid.replace("<message>", ""),
+    )
+  })
+
   test("calls a zero-sized or undisplayed element invisible", () => {
     const page = fixturePage()
     stubRect(el("#intro"), {})

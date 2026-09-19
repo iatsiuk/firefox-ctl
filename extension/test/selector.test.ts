@@ -34,6 +34,9 @@ describe("validateSelector", () => {
     expect(() => validateSelector(page, `#${"a".repeat(1000)}`)).toThrow(errors.selectorTooLong)
   })
 
+  // happy-dom memoises a selector string on the shared document, so an invalid
+  // selector throws only the first time it is parsed in the process: every
+  // suite pinning this message uses a string of its own
   test("rejects a syntactically invalid selector with the browser message", () => {
     const page = fakePage()
     const prefix = errors.selectorInvalid.replace("<message>", "")
