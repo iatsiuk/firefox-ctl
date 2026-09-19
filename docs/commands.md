@@ -68,10 +68,61 @@ message continues with `Suggested alternatives:` (up to five, each with a reason
 its value fails the same way: `text is required` for `type`, `key is required` for
 `pressKey`, `expression is required` for `evaluate`.
 
+`click` and `getElementInfo` can name their target by the text a user reads instead of by a
+selector: `selector` and `text` are mutually exclusive, by presence rather than by value, so a
+call carrying both fails with `selector and text are mutually exclusive` and a call carrying
+neither keeps the selector message above. A match is exact on whitespace-normalised visible text
+and case-sensitive. The text read is `innerText`, so `<br>` and block boundaries become spaces
+and hidden parts are left out - `<button>Apply<br>now</button>` matches `Apply now` and
+`<button>Ap<span hidden>X</span>ply</button>` matches `Apply` - runs of whitespace and
+non-breaking spaces collapse to one space, and a button whose `text-transform: uppercase`
+renders `Apply` as `APPLY` matches `APPLY`, because that is what the user sees. Invisible
+elements are skipped, by the test `getElementInfo.visible` reports: a non-zero box plus computed
+`display` other than `none` and `visibility` other than `hidden`. An off-screen element is
+visible and `click` scrolls it into view as it does for a selector. `text` must be a string,
+must not be empty once normalised and is at most 500 characters measured on the raw value:
+`text must be a string`, `text cannot be empty`, `text too long (max 500 characters)`.
+
+`scope` narrows the search to one element found by CSS selector and is accepted only together
+with `text`: `scope requires text`, `scope must be a string`, `scope cannot be empty`, the
+selector validation messages above, `Scope not found: <scope>` and `Scope is ambiguous: <scope>
+matches <n> elements`. Without it the search starts at `documentElement`. `click` re-resolves
+the scope at every probe of its wait, so a dialog that is re-rendered while the wait runs is
+followed rather than searched in its stale element.
+
+The two commands pick a different element out of the same matches. `click` maps every match to
+its nearest actionable ancestor-or-self inside the scope - the actionable set is `button,
+a[href], input[type=button], input[type=submit], [role=button], summary, label` - keeps it only
+when that ancestor's own visible text also equals the query, and deduplicates by identity, so a
+`<div>` wrapping a single `Apply` button resolves to the button, while
+`<button><span>Apply</span> changes</button>` is not a match for `Apply` at all, because the
+button renders `Apply changes`. Text that is never rendered as text is never matched:
+`<input type="submit" value="Apply">` and `<button aria-label="Apply"></button>` need
+`--selector`. `getElementInfo` takes the deepest match instead - the innermost element rendering
+exactly that text - so `<p><b>Total</b> 42</p>` with `--text Total` answers the `b`.
+
+More than one target left after that is a refusal, never a guess: `AMBIGUOUS_TEXT: "<text>"
+matches <n> elements: <sel1>, <sel2>` names up to five candidates and then `and <k> more`, each
+one a verified selector or `<tag (no unique selector)>` where none verifies. It is raised as
+soon as the second target is seen, so `click` presses nothing and does not wait out its timeout
+first. No target at all is `Element not found: text "<text>"`, with the `Suggested
+alternatives:`, `Page context:` and `Hint:` blocks a failed selector gets, the alternatives
+taken from the page's buttons and links. `click --text` polls on the same `autoWait` and
+`waitTimeout` schedule as `click --selector` and clicks its target only while it is still
+connected after the scroll; `getElementInfo` probes once, because reading never auto-waits.
+
+Both results say how the element was found: `matchedBy` is `"selector"` or `"text"`, and in text
+mode `selector` holds a selector generated for the element, or `null` when the generator cannot
+describe it (see Selectors), so the answer can be handed straight to `type`, `waitFor` or a
+second `click`. Only these two commands read `text` as a target.
+`type --text` is the text to type
+and `waitFor --text` is an unnormalised substring wait over `body.innerText`; both keep that
+meaning, and neither takes `scope`.
+
 | Command | Params | Notes |
 |---|---|---|
 | getContent | [selector], [includeHtml], [maxLength=50000] | text is `textContent` trimmed; with a selector `{selector, text, tagName, textLength, truncated}`, without one `{url, title, text, textLength, truncated}`; `includeHtml` adds `html` - `innerHTML` of the element, `documentElement.outerHTML` for the page; over `maxLength` the text ends in `\n\n[... truncated, use selector for specific content]` |
-| click | selector, [autoWait=true], [waitTimeout=5000] | polls every 100 ms until `waitTimeout` when `autoWait`, scrolls the element into view, then `element.click()`; `{selector, clicked: true, tagName, text, id, className, matchedBy}` with `id` and `className` null when absent and `matchedBy` naming the parameter that found the element |
+| click | selector \| text, [scope], [autoWait=true], [waitTimeout=5000] | polls every 100 ms until `waitTimeout` when `autoWait`, scrolls the element into view, then `element.click()`; `{selector, clicked: true, tagName, text, id, className, matchedBy}` with `id` and `className` null when absent and `matchedBy` naming the parameter that found the element, `"selector"` or `"text"`. With `text` the nearest actionable ancestor-or-self wins, two or more targets answer `AMBIGUOUS_TEXT` without clicking and `selector` is generated for the element, or `null`; see Text targeting above |
 | type | selector, text, [clear=true], [autoWait], [waitTimeout] | React/Angular compatible input events: the native value setter, then `input` (`inputType: "insertText"`) and `change`; contenteditable elements are written through `textContent`; anything else errors `Element is not editable: <selector>`; `{selector, typed, currentValue}` |
 | pressKey | key, [selector], [ctrlKey], [shiftKey], [altKey], [metaKey] | focuses the selector target, else `activeElement` or `body`; dispatches `keydown`, `keypress` (single characters only) and `keyup` with the `code` and `keyCode` maps of `src/content/interact.ts`; `{key, selector, targetTag, modifiers}`, `selector` being `"(active element)"` when none was given |
 | scroll | [selector], [x], [y], [behavior=smooth] | selector: `{selector, scrolledTo: true, elementPosition}`; coordinates: `{scrolledTo: true, noEffect, position}`, a missing axis keeping its current value; neither: `{position, pageHeight, viewportHeight}`. On an inactive tab the result adds `backgroundTab: true` and `hint: "Scroll has no effect on background tabs. Switch tab to active first."` |
@@ -85,7 +136,7 @@ its value fails the same way: `text is required` for `type`, `key is required` f
 |---|---|---|
 | getPageState | [maxHeadings=30], [maxLinks=50], [maxButtons=30], [maxInputs=30], [maxImages=20] | the limits are forwarded to the content script. `{url, title, viewport, errors, headings, links, buttons, inputs, images, landmarks, counts}`; links, buttons and inputs are filtered to visible elements and images to those larger than 20x20, but headings and landmarks are listed regardless of visibility; password values are masked as `***`, input labels come from `aria-label`, `placeholder` or `label[for]`, images need alt text and more than 20x20; `counts` holds `{shown, total}` per group. Every returned link, button and input also carries a `selector`, generated for the entries that survive the limits, not for the ones dropped by them; see Selectors below. `errors` holds the messages of the last 10 captured `error` entries, so it stays `[]` until the first `getConsoleLogs` turns console capture on (see DevTools) |
 | getAccessibilitySnapshot | [selector=body], [maxDepth=5], [maxNodes=200] | `{url, title, tree, nodeCount, maxNodes, truncated}`; invisible nodes are skipped except the root, a `div`/`span`/`p` with no role, name or text collapses into its children, node fields are `role, name, text, disabled, checked, expanded, selected, value` and appear only when set |
-| getElementInfo | selector | `{selector, tagName, attributes, text, visible, position, styles, matchedBy}` with the computed `display`, `visibility`, `opacity`, `color`, `backgroundColor` and `fontSize`; a missing element errors `Element not found: <selector>` with the same diagnostics as `click` and `type`: `Suggested alternatives:` when the page holds a near candidate, then `Page context:`. `getContent` keeps the bare message |
+| getElementInfo | selector \| text, [scope] | `{selector, tagName, attributes, text, visible, position, styles, matchedBy}` with the computed `display`, `visibility`, `opacity`, `color`, `backgroundColor` and `fontSize`; a missing element errors `Element not found: <selector>` with the same diagnostics as `click` and `type`: `Suggested alternatives:` when the page holds a near candidate, then `Page context:`. `getContent` keeps the bare message. With `text` the deepest element rendering that text wins, a miss is `Element not found: text "<text>"`, two or more matches answer `AMBIGUOUS_TEXT`, `matchedBy` is `"text"` and `selector` is generated for the element, or `null`; there is no auto-wait, see Text targeting |
 | evaluate | expression | off until the user ticks "Allow the `evaluate` command" in the add-on preferences (about:addons > Terminal Control for Firefox > Preferences); while it is off the command fails with `EVALUATE_DISABLED: evaluate is disabled; enable it in the add-on preferences (about:addons > Terminal Control for Firefox > Preferences)` and no message reaches the tab. The opt-in is read on every call, so a toggle takes effect at once, and only the browser can set it - no CLI flag turns it on. Once on there is no length cap or blocklist; it runs `new Function("return (<expression>)")` in the content script's isolated world, so only the DOM is reachable, not the page's own globals. `{expression, result, type}` with `result` JSON round-tripped (anything unserialisable becomes its string form); a throwing expression is a successful reply with `{expression, error, type: "error"}` |
 
 ### Selectors

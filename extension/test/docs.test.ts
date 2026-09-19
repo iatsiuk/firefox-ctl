@@ -359,6 +359,39 @@ describe("selector documentation", () => {
   )
 })
 
+describe("text targeting documentation", () => {
+  test.skipIf(root === undefined)(
+    "commands.md states the text contract, its limit and its errors",
+    async () => {
+      const text = await readRootDoc(join("docs", "commands.md"))
+      for (const phrase of [
+        "mutually exclusive",
+        "matchedBy",
+        "Scope not found",
+        'text "',
+        "500 characters",
+        "AMBIGUOUS_TEXT",
+      ]) {
+        expect(text).toContain(phrase)
+      }
+    },
+  )
+
+  test.skipIf(root === undefined)(
+    "commands.md keeps the text meaning of type and waitFor",
+    async () => {
+      const text = await readRootDoc(join("docs", "commands.md"))
+      expect(text).toContain("`type --text` is the text to type")
+      expect(text).toContain("`waitFor --text` is an unnormalised substring")
+    },
+  )
+
+  test.skipIf(root === undefined)("architecture.md lists the text resolver", async () => {
+    const text = await readRootDoc(join("docs", "architecture.md"))
+    expect(text).toContain("text-target.ts")
+  })
+})
+
 describe("session documentation", () => {
   test.skipIf(root === undefined)(
     "commands.md describes the session model without agent ids",
