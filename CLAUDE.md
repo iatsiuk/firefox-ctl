@@ -71,43 +71,15 @@ make ext-source          # extension: source zip for the AMO listed submission
 make ext-reproduce       # extension: rebuild the source zip and diff it against the xpi
 ```
 
-### Shipping an extension change
+### Shipping and releasing
 
-The installed add-on is the AMO-signed xpi, not the temporary load. After any change under
-`extension/`: bump `version` in `extension/manifest.json` and `extension/package.json` (AMO
-rejects a version it has already seen), run `make ext-sign`, then install the new
-`extension/web-ext-artifacts/*.xpi` over the old one via about:addons. `.env` holds
-`JWT_ISSUER` and `JWT_SECRET` and is gitignored. That is the unlisted channel, for test
-builds.
-
-A release for the listed (public) channel needs a source archive and a human review:
-
-1. `make ext-build`, `make ext-test`, `make ext-check`
-2. `make ext-xpi` and `make ext-source`, then `make ext-reproduce`, which rebuilds the source
-   zip in a temp dir and fails if the three bundles differ from the xpi
-3. `bunx addons-linter extension/web-ext-artifacts/firefox-ctl-<version>.zip`: zero errors, and
-   every remaining warning already justified in `docs/reviewer-notes.md`
-4. Submit with `bunx web-ext sign --channel listed --upload-source-code <source zip>
-   --amo-metadata <json>` from `extension/`, same `--ignore-files` list as `ext-sign`, keys from
-   `.env`. The metadata JSON is `{"version": {"approval_notes": "...", "release_notes":
-   {"en-US": "..."}}}`. AMO caps `approval_notes` at 3000 characters and rejects the whole
-   submission over it, so paste a delta since the previous version plus a pointer to
-   `docs/reviewer-notes.md` in the source zip, never the full file. License MIT/X11,
-   homepage `https://github.com/iatsiuk/firefox-ctl` and the privacy statement live on the
-   listing and need no resubmission
+Bump `version` in `extension/manifest.json` and `extension/package.json` before any AMO upload:
+AMO rejects a version it has already seen. To ship the extension (unlisted test build or the
+listed AMO release) read `docs/ship-extension.md`; to release the binary and the cask read
+`docs/release-binary.md`.
 
 The `make -C cli <target>` and `cd extension && bun <script>` forms still work; the root
 targets above only delegate to them.
-
-### Releasing the binary
-
-A pushed `v*` tag runs `.github/workflows/ci.yaml`: tests and lint for both projects, then
-`make ext-xpi` builds the unsigned extension package, and goreleaser from `cli/` publishes
-the GitHub release (macOS arm64, Linux amd64, Linux arm64, checksums, plus that package as
-`firefox-ctl-extension-<version>.zip`) and pushes the `firefox-ctl` cask to
-`iatsiuk/homebrew-tap`. The job fails if `extension/manifest.json` does not carry the tag's
-version. The workflow needs the `HOMEBREW_TAP_TOKEN` repository secret; the extension is not
-signed in CI, the signed build comes from AMO. Nothing in the tap is edited by hand.
 
 ## Language
 
