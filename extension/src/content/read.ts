@@ -20,6 +20,14 @@ import { isDisplayNone, isRendered } from "./visibility"
 
 const truncationSuffix = "\n\n[... truncated, use selector for specific content]"
 
+/** The head of a tail cut: what the caller asked to skip, counted. */
+function tailPrefix(dropped: number): string {
+  return `[... ${dropped} characters before this point]\n\n`
+}
+
+const TAIL_INVALID = "tail must be a positive integer"
+const TAIL_EXCLUSIVE = "tail and maxLength are mutually exclusive"
+
 const DEFAULT_MAX_LENGTH = 50000
 const ELEMENT_TEXT_LIMIT = 500
 const A11Y_TEXT_LIMIT = 100
@@ -67,11 +75,55 @@ function requireElement(page: Page, selector: JsonValue | undefined): Element {
   return element
 }
 
-function truncateText(text: string, limit: number): { text: string; truncated: boolean } {
+/** One cut of the extracted text; `tailLength` only when `tail` was asked for. */
+interface Cut {
+  text: string
+  truncated: boolean
+  tailLength?: number
+}
+
+function truncateText(text: string, limit: number): Cut {
   if (text.length <= limit) {
     return { text, truncated: false }
   }
   return { text: text.slice(0, limit) + truncationSuffix, truncated: true }
+}
+
+/** The last `limit` UTF-16 code units, which may split a surrogate pair. */
+function tailText(text: string, limit: number): Cut {
+  const tailLength = Math.min(limit, text.length)
+  if (text.length <= limit) {
+    return { text, truncated: false, tailLength }
+  }
+  return {
+    text: tailPrefix(text.length - limit) + text.slice(-limit),
+    truncated: true,
+    tailLength,
+  }
+}
+
+/**
+ * `tail` by presence, like every other exclusive pair: naming `maxLength` at
+ * all contradicts it, whatever the value. Validation runs before the DOM is
+ * read, so a typo never costs an extraction.
+ */
+function requireTail(params: JsonObject): number | null {
+  if (!("tail" in params)) {
+    return null
+  }
+  if ("maxLength" in params) {
+    throw new Error(TAIL_EXCLUSIVE)
+  }
+  const tail = params.tail
+  if (typeof tail !== "number" || !Number.isInteger(tail) || tail <= 0) {
+    throw new Error(TAIL_INVALID)
+  }
+  return tail
+}
+
+/** The tail cut when one was asked for, the head cut otherwise. */
+function cutText(text: string, tail: number | null, maxLength: number): Cut {
+  return tail === null ? truncateText(text, maxLength) : tailText(text, tail)
 }
 
 /** The extraction result of one root: what `getContent` reports as text. */
@@ -96,19 +148,23 @@ function contentText(page: Page, element: Element): Content {
 
 export function getContent(params: JsonObject, page: Page): JsonValue {
   const includeHtml = params.includeHtml === true
+  const tail = requireTail(params)
   const maxLength = numberParam(params.maxLength, DEFAULT_MAX_LENGTH)
 
   if (params.selector) {
     const element = requireElement(page, params.selector)
     const raw = contentText(page, element)
-    const { text, truncated } = truncateText(raw.text, maxLength)
+    const cut = cutText(raw.text, tail, maxLength)
     const result: JsonObject = {
       selector: params.selector,
-      text,
+      text: cut.text,
       tagName: element.tagName.toLowerCase(),
       textLength: raw.text.length,
-      truncated,
+      truncated: cut.truncated,
       hidden: raw.hidden,
+    }
+    if (cut.tailLength !== undefined) {
+      result.tailLength = cut.tailLength
     }
     if (includeHtml) {
       result.html = element.innerHTML
@@ -119,14 +175,17 @@ export function getContent(params: JsonObject, page: Page): JsonValue {
   const body = page.document.body
   // a document without a body renders nothing at all
   const raw: Content = body === null ? { text: "", hidden: true } : contentText(page, body)
-  const { text, truncated } = truncateText(raw.text, maxLength)
+  const cut = cutText(raw.text, tail, maxLength)
   const result: JsonObject = {
     url: page.window.location.href,
     title: page.document.title,
-    text,
+    text: cut.text,
     textLength: raw.text.length,
-    truncated,
+    truncated: cut.truncated,
     hidden: raw.hidden,
+  }
+  if (cut.tailLength !== undefined) {
+    result.tailLength = cut.tailLength
   }
   if (includeHtml) {
     result.html = page.document.documentElement.outerHTML

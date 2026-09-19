@@ -40,6 +40,8 @@
   "notFoundContext": "Page context:",
   "notFoundIframe": "  Warning: Inside iframe - element may be in parent frame",
   "notFoundHint": "Hint: Use getPageState to see available elements.",
+  "tailInvalid": "tail must be a positive integer",
+  "tailExclusive": "tail and maxLength are mutually exclusive",
   "elementNotEditable": "Element is not editable: <selector>",
   "timeoutText": "Timeout waiting for text: \"<text>\"",
   "timeoutUrl": "Timeout waiting for URL matching: \"<url>\"",

@@ -7,7 +7,7 @@ import {
   getElementInfo,
   getPageState,
 } from "../src/content/read"
-import type { JsonValue } from "../src/protocol"
+import type { JsonObject, JsonValue } from "../src/protocol"
 import {
   assertResolves,
   type FakePage,
@@ -354,6 +354,163 @@ describe("getContent", () => {
 
   test("validates the selector it was given", () => {
     expect(() => getContent({ selector: "   " }, fixturePage())).toThrow(errors.selectorEmpty)
+  })
+})
+
+// The tail cut: the last N characters of the extracted text after a marker
+// naming what was dropped. Counting is in UTF-16 code units, the unit
+// `maxLength` has always used.
+describe("getContent --tail", () => {
+  /** The page branch with `text` as the body's rendered text. */
+  function tailPage(text: string): Page {
+    const page = fixturePage()
+    textSeam(document.body, { innerText: text })
+    return page
+  }
+
+  test("keeps the last characters and names the dropped ones", () => {
+    expect(getContent({ tail: 5 }, tailPage("abcdefghij"))).toEqual({
+      url: "https://example.com/fixture",
+      title: "Fixture page",
+      text: "[... 5 characters before this point]\n\nfghij",
+      textLength: 10,
+      truncated: true,
+      tailLength: 5,
+      hidden: false,
+    })
+  })
+
+  test("cuts the tail of a single element", () => {
+    const page = fixturePage()
+    textSeam(el("#intro"), { innerText: "abcdefghij" })
+
+    expect(getContent({ selector: "#intro", tail: 3 }, page)).toEqual({
+      selector: "#intro",
+      text: "[... 7 characters before this point]\n\nhij",
+      tagName: "p",
+      textLength: 10,
+      truncated: true,
+      tailLength: 3,
+      hidden: false,
+    })
+  })
+
+  test("a tail at or above the length answers the whole text", () => {
+    expect(getContent({ tail: 20 }, tailPage("abcdefghij"))).toMatchObject({
+      text: "abcdefghij",
+      textLength: 10,
+      truncated: false,
+      tailLength: 10,
+    })
+    expect(getContent({ tail: 10 }, tailPage("abcdefghij"))).toMatchObject({
+      text: "abcdefghij",
+      truncated: false,
+      tailLength: 10,
+    })
+  })
+
+  test("a hidden or empty root answers an empty tail", () => {
+    const page = fixturePage()
+    el("main").insertAdjacentHTML(
+      "beforeend",
+      '<section id="panel">Secret</section><div id="blank"> </div>',
+    )
+    stubStyle(el("#panel"), { display: "none" })
+
+    expect(getContent({ selector: "#panel", tail: 5 }, page)).toMatchObject({
+      text: "",
+      textLength: 0,
+      truncated: false,
+      tailLength: 0,
+      hidden: true,
+    })
+    expect(getContent({ selector: "#blank", tail: 5 }, page)).toMatchObject({
+      text: "",
+      tailLength: 0,
+      hidden: false,
+    })
+  })
+
+  test("without tail the head cut stands and no tailLength is reported", () => {
+    const content = getContent({ maxLength: 7 }, tailPage("abcdefghij")) as JsonObject
+
+    expect("tailLength" in content).toBe(false)
+    expect(content).toMatchObject({
+      text: "abcdefg\n\n[... truncated, use selector for specific content]",
+      truncated: true,
+    })
+  })
+
+  test("the default maxLength does not apply to a tail", () => {
+    const content = getContent({ tail: 60000 }, tailPage("x".repeat(55000))) as JsonObject
+
+    expect(content).toMatchObject({ textLength: 55000, truncated: false, tailLength: 55000 })
+    expect(String(content.text).length).toBe(55000)
+  })
+
+  test("tail and maxLength are mutually exclusive by presence", () => {
+    const page = fixturePage()
+    forbidText(el("#intro"))
+
+    for (const maxLength of [100, null, 0]) {
+      expect(messageOf(() => getContent({ selector: "#intro", tail: 5, maxLength }, page))).toBe(
+        errors.tailExclusive,
+      )
+    }
+  })
+
+  test("tail must be a positive integer", () => {
+    const page = fixturePage()
+    forbidText(el("#intro"))
+    const invalid: JsonValue[] = [
+      null,
+      "5",
+      true,
+      [],
+      {},
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      1.5,
+      0,
+      -1,
+    ]
+
+    for (const tail of invalid) {
+      expect(messageOf(() => getContent({ selector: "#intro", tail }, page))).toBe(
+        errors.tailInvalid,
+      )
+    }
+  })
+
+  test("the exclusivity check runs before the value check", () => {
+    const page = fixturePage()
+    forbidText(document.body)
+
+    expect(messageOf(() => getContent({ tail: "x", maxLength: 1 }, page))).toBe(
+      errors.tailExclusive,
+    )
+  })
+
+  test("a tail leaves the html untouched", () => {
+    const page = fixturePage()
+    textSeam(el("#intro"), { innerText: "abcdefghij" })
+
+    expect(getContent({ selector: "#intro", tail: 5, includeHtml: true }, page)).toMatchObject({
+      text: "[... 5 characters before this point]\n\nfghij",
+      html: "Hello world",
+    })
+  })
+
+  test("a tail counts UTF-16 units and may split a surrogate pair", () => {
+    const page = fixturePage()
+    textSeam(el("#intro"), { innerText: "ab\u{1F600}cd" })
+
+    expect(getContent({ selector: "#intro", tail: 3 }, page)).toMatchObject({
+      // the documented behaviour: the low surrogate is kept on its own
+      text: "[... 3 characters before this point]\n\n\uDE00cd",
+      textLength: 6,
+      tailLength: 3,
+    })
   })
 })
 

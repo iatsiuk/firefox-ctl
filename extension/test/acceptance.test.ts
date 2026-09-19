@@ -498,6 +498,22 @@ describe("page commands", () => {
     })
   })
 
+  test("getContent answers the tail of an element through the port", async () => {
+    const browser = userBrowser()
+    const { port } = session(browser)
+    contentTab(browser)
+    result(await run(port, "createWindow", { private: false }))
+
+    const main = document.querySelector("main") as HTMLElement
+    const tailed = result(await run(port, "getContent", { selector: "main", tail: 5 }))
+    expect(tailed).toMatchObject({ truncated: true, tailLength: 5 })
+    expect(String(tailed.text)).toEndWith(main.innerText.trim().slice(-5))
+
+    expect(await failure(port, "getContent", { selector: "main", tail: 5, maxLength: 10 })).toBe(
+      errors.tailExclusive,
+    )
+  })
+
   test("click by text refuses an ambiguous label and presses a unique one", async () => {
     const browser = userBrowser()
     const { port } = session(browser)
