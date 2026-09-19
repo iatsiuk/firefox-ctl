@@ -55,6 +55,20 @@ describe("commands.json", () => {
     expect(ours).toEqual(go)
   })
 
+  test("is byte for byte the Go fixture", async () => {
+    const root = repoRoot()
+    if (root === undefined) {
+      console.warn("skipping: no cli/go.mod above the extension directory")
+      return
+    }
+    // the two copies are one contract, so `cmp` on them must stay silent; biome
+    // formats our copy, which makes it the canonical text of both
+    const goFixture = join(root, "cli", "internal", "protocol", "testdata", "commands.json")
+    const go = await Bun.file(goFixture).text()
+    const ours = await Bun.file(`${import.meta.dir}/../src/commands.json`).text()
+    expect(ours).toBe(go)
+  })
+
   test("COMMANDS lists all 30 command names in fixture order", () => {
     expect(COMMANDS.length).toBe(30)
     expect(COMMANDS[0]).toBe("ping")

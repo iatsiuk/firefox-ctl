@@ -1,0 +1,148 @@
+<!doctype html>
+<!--
+  Manual Firefox smoke fixture for click --text and getElementInfo --text.
+
+  Serve it over a local HTTP server, not file://: createWindow answers
+  `Error: Illegal URL` to a file:// URL.
+
+    cd extension/test/fixtures/smoke && python3 -m http.server 8765
+    firefox-ctl createWindow --url http://localhost:8765/text-target.html
+
+  Then run the checks listed under "Post-Completion" in
+  docs/plans/20260919-text-targeting.md. Every section below serves one of them:
+
+    #dialog / page level   two visible `Apply` buttons, plus a hidden and an
+                           off-screen one, so bare `--text Apply` is AMBIGUOUS_TEXT
+                           over three candidates and clicks nothing
+    #wrapped               a div around a single button: one click, not two
+    #counter               `Apply changes` is not a match for `Apply`
+    #saves                 three identical `Save` buttons, three selectors
+    #rendered              innerText cases: `<br>` and a hidden inline span
+    #transformed           text-transform, so `APPLY` matches and `Apply` does not
+    #totals                `<b>Total</b>` for the deepest-match rule, and an NBSP
+                           label for whitespace normalisation
+    #nontext               value-only submit and aria-label-only button: no match
+    #missing               a near candidate for the alternatives block
+
+  Every button carries an `<output data-for="its id">` that counts its own
+  clicks, so a step that must click once is checked by reading that counter, and
+  AMBIGUOUS_TEXT is checked by every counter staying at 0:
+
+    firefox-ctl getContent --selector "#counters"
+
+  Nothing on this page contains the string `Absent`.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>firefox-ctl text targeting smoke</title>
+    <style>
+      body { font: 14px system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
+      h2 { margin-top: 2rem; font-size: 1rem; }
+      button, input { margin: 0.2rem; min-width: 8rem; }
+      .hidden-apply { display: none; }
+      .offscreen-apply { position: absolute; left: -10000px; top: -10000px; }
+      #transformed button { text-transform: uppercase; }
+      #counters { margin-top: 2rem; font-family: ui-monospace, monospace; color: #555; }
+      #counters output { display: block; }
+    </style>
+  </head>
+  <body>
+    <h1>firefox-ctl text targeting smoke</h1>
+
+    <h2>Two visible Apply buttons, one hidden, one off-screen</h2>
+    <section id="dialog">
+      <button type="button" id="dialog-apply">Apply</button>
+    </section>
+    <p><button type="button" id="page-apply">Apply</button></p>
+    <!-- display: none, so the resolver never lists it -->
+    <button type="button" id="hidden-apply" class="hidden-apply">Apply</button>
+    <!-- off-screen is visible: it is listed, and a single-match click scrolls to it -->
+    <button type="button" id="offscreen-apply" class="offscreen-apply">Apply</button>
+
+    <h2>A wrapper div around a single Apply button</h2>
+    <section id="wrapped">
+      <div><div><button type="button" id="wrapped-apply">Apply</button></div></div>
+    </section>
+
+    <h2>Apply changes: not a match for Apply</h2>
+    <section id="counter">
+      <button type="button" id="counter-apply"><span>Apply</span> changes</button>
+    </section>
+
+    <h2>Three identical Save buttons</h2>
+    <section id="saves">
+      <button type="button" id="save-1">Save</button>
+      <button type="button" id="save-2">Save</button>
+      <button type="button" id="save-3">Save</button>
+    </section>
+
+    <h2>Visible text is innerText, not textContent</h2>
+    <section id="rendered">
+      <!-- textContent `Applynow`, innerText `Apply now` -->
+      <button type="button" id="rendered-br">Apply<br />now</button>
+      <!-- textContent `ApXply`, innerText `Apply` -->
+      <button type="button" id="rendered-inline">Ap<span hidden>X</span>ply</button>
+    </section>
+
+    <h2>text-transform changes what matches</h2>
+    <section id="transformed">
+      <!-- rendered as APPLY, so --text APPLY matches and --text Apply does not -->
+      <button type="button" id="transformed-apply">Apply</button>
+    </section>
+
+    <h2>Deepest match and whitespace normalisation</h2>
+    <section id="totals">
+      <p id="total-line"><b>Total</b></p>
+      <!-- a NBSP and a double space, both normalised to single spaces -->
+      <label id="nbsp-label" for="amount-field">Total&nbsp; amount</label>
+      <input id="amount-field" type="text" />
+    </section>
+
+    <h2>Apply that is not text</h2>
+    <section id="nontext">
+      <input type="submit" value="Apply" id="submit-apply" />
+      <button type="button" id="aria-apply" aria-label="Apply"></button>
+    </section>
+
+    <h2>Near miss for the diagnostics</h2>
+    <section id="missing">
+      <button type="button" id="missing-link">Missing link</button>
+    </section>
+
+    <h2>Click counters</h2>
+    <div id="counters">
+      <output data-for="dialog-apply">dialog-apply 0</output>
+      <output data-for="page-apply">page-apply 0</output>
+      <output data-for="hidden-apply">hidden-apply 0</output>
+      <output data-for="offscreen-apply">offscreen-apply 0</output>
+      <output data-for="wrapped-apply">wrapped-apply 0</output>
+      <output data-for="counter-apply">counter-apply 0</output>
+      <output data-for="save-1">save-1 0</output>
+      <output data-for="save-2">save-2 0</output>
+      <output data-for="save-3">save-3 0</output>
+      <output data-for="rendered-br">rendered-br 0</output>
+      <output data-for="rendered-inline">rendered-inline 0</output>
+      <output data-for="transformed-apply">transformed-apply 0</output>
+      <output data-for="submit-apply">submit-apply 0</output>
+      <output data-for="aria-apply">aria-apply 0</output>
+      <output data-for="missing-link">missing-link 0</output>
+    </div>
+
+    <script>
+      // one counter per control, paired by id, so "clicked once" and "clicked
+      // nothing" are both readable from #counters after every smoke step
+      for (const output of document.querySelectorAll("#counters output")) {
+        const id = output.dataset.for
+        const control = document.getElementById(id)
+        if (control === null) continue
+        let clicks = 0
+        control.addEventListener("click", (event) => {
+          event.preventDefault()
+          clicks += 1
+          output.textContent = `${id} ${clicks}`
+        })
+      }
+    </script>
+  </body>
+</html>
