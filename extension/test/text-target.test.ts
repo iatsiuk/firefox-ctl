@@ -277,6 +277,14 @@ describe("findByText actionable", () => {
     )
     expect(ids(findByText(page, "Apply", el("#root"), "actionable"))).toEqual(["lb", "sm", "rb"])
   })
+
+  test("rejects an SVG role=button, which matches ACTIONABLE but has no click()", () => {
+    const page = mount(
+      '<div id="root"><svg id="sv" role="button"><text id="tx">Apply</text></svg></div>',
+    )
+    expect((el("#sv") as Partial<HTMLElement>).click).toBeUndefined()
+    expect(findByText(page, "Apply", el("#root"), "actionable")).toEqual([])
+  })
 })
 
 describe("findByText cost", () => {

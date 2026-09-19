@@ -81,9 +81,11 @@ async function requireElement(
 
 /**
  * The one actionable element rendering `text`, scrolled into view and still
- * connected. The scope is resolved again at every probe, so a re-rendered
- * dialog is followed; two or more targets fail at once; a target that detaches
- * during the frame wait sends the search back to the poll loop.
+ * the sole match. The scope is resolved again at every probe, so a
+ * re-rendered dialog is followed; two or more targets fail at once, including
+ * a second match that appears during the frame wait; a target that detaches,
+ * or is displaced by a different match, during that wait sends the search
+ * back to the poll loop.
  */
 async function requireTextTarget(
   params: JsonObject,
@@ -110,9 +112,10 @@ async function requireTextTarget(
       throw buildTextNotFoundError(page, text)
     }
     element.scrollIntoView({ behavior: "smooth", block: "center" })
-    // let the smooth scroll settle before the click lands
+    // let the smooth scroll settle before the click lands, then confirm the
+    // match still holds: a stale reference must never reach `.click()`
     await nextFrame(page)
-    if (element.isConnected) {
+    if (probe() === element) {
       return element
     }
     if (!autoWait || page.now() >= deadline) {

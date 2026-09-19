@@ -71,15 +71,22 @@ function collect(page: Page, text: string, root: Element, cache: Map<Element, st
   )
 }
 
+/** `ACTIONABLE` matches by attribute, so it can land on an SVG element (an
+ * `<svg role="button">` or a namespaced `<a href>`); those never gained the
+ * HTML `click()` method, so calling it would throw. */
+function isClickable(element: Element): element is HTMLElement {
+  return typeof (element as Partial<HTMLElement>).click === "function"
+}
+
 function actionableTarget(
   page: Page,
   text: string,
   root: Element,
   match: Element,
   cache: Map<Element, string>,
-): Element | null {
+): HTMLElement | null {
   const target = match.closest(ACTIONABLE)
-  if (target === null || !root.contains(target)) {
+  if (target === null || !root.contains(target) || !isClickable(target)) {
     return null
   }
   if (!isRendered(page, target)) {
@@ -105,7 +112,7 @@ export function findByText(
   if (mode === "deepest") {
     return deepest
   }
-  const targets: Element[] = []
+  const targets: HTMLElement[] = []
   for (const match of deepest) {
     const target = actionableTarget(page, text, root, match, cache)
     if (target !== null && !targets.includes(target)) {

@@ -341,6 +341,33 @@ describe("click by text", () => {
     expect(clicks()).toBe(0)
   })
 
+  test("refuses to click once a second match appears during the frame wait", async () => {
+    const page = mount('<button id="apply">Apply</button>')
+    const button = el("#apply")
+    const clicks = counter(button)
+    // the scroll is the last thing before the frame wait: the fixture adds a
+    // second "Apply" there, so the sole match becomes two by the time the
+    // frame resolves
+    Object.defineProperty(button, "scrollIntoView", {
+      configurable: true,
+      value: () => {
+        const twin = document.createElement("button")
+        twin.id = "twin"
+        twin.textContent = "Apply"
+        document.body.append(twin)
+        showAll()
+      },
+    })
+
+    const settled = rejection(click({ text: "Apply", waitTimeout: 500 }, page))
+    await page.advance(1000)
+
+    expect((await settled).message).toBe(
+      'AMBIGUOUS_TEXT: "Apply" matches 2 elements: #apply, #twin',
+    )
+    expect(clicks()).toBe(0)
+  })
+
   test("fails at once when a target detaches during the frame wait with autoWait off", async () => {
     const page = mount('<button id="apply">Apply</button>')
     const button = el("#apply")
