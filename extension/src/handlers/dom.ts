@@ -11,7 +11,8 @@ import { ExtensionError } from "../protocol"
 import { EVALUATE_ENABLED_DEFAULT, readEvaluateEnabled } from "../settings"
 import { describeTabError, frameNotObserved } from "../tab-errors"
 import { resolveTargetTab } from "./tabs"
-import { waitForUrl, waitInPage } from "./wait"
+import type { SendAction } from "./wait"
+import { waitForUrl, waitInFrame, waitInPage } from "./wait"
 
 /** The commands the content script serves, in `commands.json` order. */
 export const PAGE_COMMANDS = [
@@ -41,6 +42,10 @@ const EVALUATE_DISABLED_HINT =
 const TARGET_PARAMS = ["tabId", "windowId", "frameId"]
 
 const INVALID_FRAME_ID = "frameId must be a non-negative integer."
+
+// a URL wait watches the tab, which no child frame owns: the tab can reach the
+// wanted URL while the frame sits on another one, and the other way round
+const URL_WAIT_IN_FRAME = "waitFor --url is not supported with --frameId"
 
 /**
  * Runs one action in one frame of a tab. A messaging failure becomes a coded
@@ -198,18 +203,24 @@ const scroll: Handler = async (params, deps) => {
  * Precedence: text, then URL, then selector. A URL wait runs in
  * the background, where it survives the navigation it waits for; the other two
  * belong to the document, so they go through `waitInPage`, which first lets the
- * tab finish loading.
+ * tab finish loading, or through `waitInFrame`, which waits for the frame
+ * instead. The URL mode has no frame reading at all and is refused there.
  */
 const waitFor: Handler = async (params, deps) => {
   const frameId = parseFrameId(params.frameId)
+  if (frameId !== 0 && typeof params.url === "string") {
+    throw new Error(URL_WAIT_IN_FRAME)
+  }
   const tabId = await targetTabId(deps, params)
   const forwarded = actionParams(params)
   if (typeof params.text !== "string" && typeof params.url === "string") {
     return withTabId(tabId, await waitForUrl(deps, deps.ctx, tabId, forwarded))
   }
-  const result = await waitInPage(deps, deps.ctx, tabId, forwarded, (id, action, sent) =>
-    executeInFrame(deps, id, action, sent, frameId),
-  )
+  const send: SendAction = (id, action, sent) => executeInFrame(deps, id, action, sent, frameId)
+  const result =
+    frameId === 0
+      ? await waitInPage(deps, deps.ctx, tabId, forwarded, send)
+      : await waitInFrame(deps, deps.ctx, tabId, forwarded, frameId, send)
   return withTabId(tabId, result, frameId)
 }
 

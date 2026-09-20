@@ -70,6 +70,19 @@ export function isContentScriptMissing(error: unknown): boolean {
   return errorText(error).includes(MISSING_RECEIVER)
 }
 
+/**
+ * True when a send into a child frame found nothing to answer it: the frame
+ * script is missing, or the registry entry it was aimed at is stale. A frame
+ * that navigates takes its script with it and is injected again, so a wait on
+ * that frame may still succeed and retries on either.
+ */
+export function isFrameUnreachable(error: unknown): boolean {
+  if (error instanceof ExtensionError && error.code === "FRAME_NOT_OBSERVED") {
+    return true
+  }
+  return isContentScriptMissing(error)
+}
+
 function classifyTab(tab: Tab, context: string, tabId: number): ExtensionError | null {
   if (tab.title === "Problem loading page" || tab.title === "Server Not Found") {
     return new ExtensionError(

@@ -11,7 +11,12 @@ import type { Environment } from "../env"
 import { globToRegExp } from "../glob"
 import type { CommandContext, JsonObject, JsonValue } from "../protocol"
 import { ExtensionError } from "../protocol"
-import { describeTabError, isContentScriptMissing } from "../tab-errors"
+import {
+  describeTabError,
+  frameNotObserved,
+  isContentScriptMissing,
+  isFrameUnreachable,
+} from "../tab-errors"
 
 const DEFAULT_TIMEOUT = 10000
 
@@ -204,6 +209,55 @@ export async function waitInPage(
       }
       if (env.now() >= deadline) {
         throw await waitTimeout(deps, tabId, params)
+      }
+    }
+    // bounded by what is left before the deadline, so a retry can never wake
+    // up after it and send once more
+    await delay(env, Math.min(RETRY_INTERVAL_MS, Math.max(0, deadline - env.now())))
+  }
+}
+
+/**
+ * A text or selector wait inside a child frame. A frame loads on its own
+ * schedule, so instead of the tab's load this wait holds until the registry
+ * admits the frame, then lets the frame script wait with whatever is left of
+ * the one deadline both phases share. A frame that navigates mid-wait takes its
+ * script with it and is injected again, so a send that finds no receiver drops
+ * the stale entry and waits for the frame once more.
+ */
+export async function waitInFrame(
+  deps: Services,
+  ctx: CommandContext,
+  tabId: number,
+  params: JsonObject,
+  frameId: number,
+  send: SendAction,
+): Promise<JsonValue> {
+  const { env, frames } = deps
+  const start = env.now()
+  const total = typeof params.timeout === "number" ? params.timeout : DEFAULT_TIMEOUT
+  const deadline = Math.min(start + total, ctx.deadlineAt) - WAIT_TIMEOUT_MARGIN_MS
+
+  for (;;) {
+    const admission = await frames.awaitFrame(tabId, { frameId }, deadline)
+    if (admission.outcome === "closed") {
+      throw tabClosed(tabId)
+    }
+    // a frame that never connected and a watch that was closed leave the same
+    // gap: nothing in that tab can answer for this frame id
+    if (admission.outcome !== "found") {
+      throw frameNotObserved(tabId, frameId)
+    }
+    const before = env.now()
+    try {
+      const left = Math.max(0, deadline - before)
+      return withElapsed(await send(tabId, "waitFor", { ...params, timeout: left }), before - start)
+    } catch (error) {
+      if (!isFrameUnreachable(error)) {
+        throw error
+      }
+      if (env.now() >= deadline) {
+        throw frameNotObserved(tabId, frameId)
       }
     }
     // bounded by what is left before the deadline, so a retry can never wake

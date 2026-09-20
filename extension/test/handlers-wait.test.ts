@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test"
 import { AttachedTabs } from "../src/attached"
 import { CaptureLocks } from "../src/capture-locks"
 import type { HandlerDeps } from "../src/dispatch"
-import { FrameRegistry } from "../src/frames"
+import { FRAME_PORT_NAME, FrameRegistry } from "../src/frames"
 import { pageHandlers } from "../src/handlers/dom"
 import { waitForUrl } from "../src/handlers/wait"
 import { NetworkTracker } from "../src/network"
@@ -14,7 +14,7 @@ import type { JsonObject, JsonValue } from "../src/protocol"
 import { commandContext } from "../src/protocol"
 import { waitForPageReady } from "../src/readiness"
 import { Session } from "../src/session"
-import { FakeBrowser, FakeEnvironment } from "./fakes"
+import { FakeBrowser, FakeEnvironment, FakePort } from "./fakes"
 import errors from "./fixtures/errors.json"
 
 interface Sent {
@@ -27,6 +27,7 @@ interface Harness {
   browser: FakeBrowser
   env: FakeEnvironment
   deps: HandlerDeps
+  frames: FrameRegistry
   sent: Sent[]
   tabId: number
   listeners(): number
@@ -46,6 +47,7 @@ function harness(options: { url?: string; timeout?: number; status?: string } = 
   const session = new Session(browser, env)
   const attached = new AttachedTabs(browser, env)
   const params: JsonObject = options.timeout === undefined ? {} : { _timeout: options.timeout }
+  const frames = new FrameRegistry(env)
   const deps: HandlerDeps = {
     browser,
     env,
@@ -53,7 +55,7 @@ function harness(options: { url?: string; timeout?: number; status?: string } = 
     attached,
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
-    frames: new FrameRegistry(env),
+    frames,
     readiness: waitForPageReady,
     ctx: commandContext(params, env),
   }
@@ -88,6 +90,7 @@ function harness(options: { url?: string; timeout?: number; status?: string } = 
     browser,
     env,
     deps,
+    frames,
     sent,
     tabId,
     listeners: () => browser.tabsUpdated.listeners.length + browser.tabsRemoved.listeners.length,
@@ -473,5 +476,228 @@ describe("waitFor on a loading tab", () => {
       found: true,
     })
     expect(h.sent).toEqual([])
+  })
+})
+
+describe("waitFor inside a child frame", () => {
+  const FRAME_ID = 7
+  const FRAME_URL = "https://sdk-web-card.sandbox.y.uno/v1.88.5/pages/secured-fields.html#pan"
+  const MISSING = "Could not establish connection. Receiving end does not exist."
+
+  // FRAME_NOT_OBSERVED is documented with the rest of the frame commands, and
+  // the fixture suite only accepts prefixes that are already in the docs
+  const notObserved = (tabId: number, frameId: number): string =>
+    `FRAME_NOT_OBSERVED: frame ${frameId} of tab ${tabId} is not observed; ` +
+    "call watchFrames before the frame loads or reopen it"
+
+  function frameHarness(options: { timeout?: number; status?: string } = {}): Harness {
+    const h = harness(options)
+    h.frames.attach(h.browser)
+    return h
+  }
+
+  /** Puts one child frame of the tab on the registry, the way an injection ends. */
+  async function observe(h: Harness, frameId = FRAME_ID): Promise<FakePort> {
+    if (!h.frames.isWatched(h.tabId)) {
+      h.frames.watch(h.tabId)
+    }
+    await h.frames.frameLoaded({
+      tabId: h.tabId,
+      frameId,
+      parentFrameId: 0,
+      url: FRAME_URL,
+      timeStamp: 0,
+    })
+    const port = new FakePort({
+      name: FRAME_PORT_NAME,
+      sender: { tab: { id: h.tabId }, frameId, url: FRAME_URL },
+    })
+    h.browser.emitConnect(port)
+    return port
+  }
+
+  test("refuses a url wait in a child frame before anything is sent", async () => {
+    const h = frameHarness()
+    await observe(h)
+
+    const error = await caught(h.wait({ url: "https://example.com/*", frameId: FRAME_ID }))
+
+    expect(error.message).toBe("waitFor --url is not supported with --frameId")
+    expect(h.browser.sentMessages).toEqual([])
+    expect(h.listeners()).toBe(1)
+  })
+
+  test("refuses a url wait in a frame even when text would win", async () => {
+    const h = frameHarness()
+    await observe(h)
+
+    const error = await caught(
+      h.wait({ text: "Pay", url: "https://example.com/*", frameId: FRAME_ID }),
+    )
+
+    expect(error.message).toBe("waitFor --url is not supported with --frameId")
+    expect(h.browser.sentMessages).toEqual([])
+  })
+
+  test("awaits the frame instead of the tab load, then sends within one deadline", async () => {
+    const h = frameHarness({ status: "loading" })
+    h.frames.watch(h.tabId)
+
+    const pending = h.wait({ selector: "#pan", frameId: FRAME_ID })
+    await settle()
+    // no awaitTabComplete: the frame is ready on its own schedule
+    expect(h.browser.tabsUpdated.listeners.length).toBe(0)
+    expect(h.browser.sentMessages).toEqual([])
+
+    h.env.advance(2000)
+    await observe(h)
+    await settle()
+
+    expect(await pending).toEqual({ tabId: h.tabId, frameId: FRAME_ID, forwarded: true })
+    // the registry wait spent 2000 of the shared 9900 ms budget
+    expect(h.sent[0]?.params).toEqual({ selector: "#pan", timeout: 7900 })
+    expect(h.browser.sentMessages.map((message) => message.options)).toEqual([
+      { frameId: FRAME_ID },
+    ])
+    expect(h.env.pendingTimers()).toBe(0)
+  })
+
+  test("sends at once when the frame is already observed", async () => {
+    const h = frameHarness({ status: "loading" })
+    await observe(h)
+
+    expect(await h.wait({ text: "Card number", frameId: FRAME_ID })).toEqual({
+      tabId: h.tabId,
+      frameId: FRAME_ID,
+      forwarded: true,
+    })
+    expect(h.sent[0]?.params).toEqual({ text: "Card number", timeout: 9900 })
+    expect(h.env.pendingTimers()).toBe(0)
+  })
+
+  test("refuses at once when nobody watches the tab", async () => {
+    const h = frameHarness()
+
+    const error = await caught(h.wait({ selector: "#pan", frameId: FRAME_ID }))
+
+    expect(error.message).toBe(notObserved(h.tabId, FRAME_ID))
+    expect(h.browser.sentMessages).toEqual([])
+    expect(h.env.pendingTimers()).toBe(0)
+  })
+
+  test("reports the frame as unobserved when it never connects", async () => {
+    const h = frameHarness()
+    h.frames.watch(h.tabId)
+    const pending = caught(h.wait({ selector: "#pan", frameId: FRAME_ID, timeout: 2000 }))
+    await settle()
+
+    h.env.advance(1899)
+    await settle()
+    expect(h.env.pendingTimers()).toBe(1)
+    h.env.advance(1)
+
+    expect((await pending).message).toBe(notObserved(h.tabId, FRAME_ID))
+    expect(h.browser.sentMessages).toEqual([])
+    expect(h.env.pendingTimers()).toBe(0)
+  })
+
+  test("reports the frame as unobserved when the watch closes while it waits", async () => {
+    const h = frameHarness()
+    h.frames.watch(h.tabId)
+    const pending = caught(h.wait({ selector: "#pan", frameId: FRAME_ID }))
+    await settle()
+
+    h.frames.unwatch(h.tabId)
+
+    expect((await pending).message).toBe(notObserved(h.tabId, FRAME_ID))
+    expect(h.env.pendingTimers()).toBe(0)
+  })
+
+  test("reports the tab closed while it waits for the frame", async () => {
+    const h = frameHarness()
+    h.frames.watch(h.tabId)
+    const pending = caught(h.wait({ selector: "#pan", frameId: FRAME_ID }))
+    await settle()
+
+    h.browser.removeTab(h.tabId)
+
+    expect((await pending).message).toBe(errors.tabClosed.replace("<id>", String(h.tabId)))
+    expect(h.env.pendingTimers()).toBe(0)
+  })
+
+  test("forgets the frame and awaits it again when the send finds no receiver", async () => {
+    const h = frameHarness()
+    await observe(h)
+    let attempts = 0
+    h.browser.sendMessageHandler = (tabId, message) => {
+      attempts++
+      if (attempts === 1) {
+        return Promise.reject(new Error(MISSING))
+      }
+      const frame = message as { action: string; params: JsonObject }
+      h.sent.push({ tabId, action: frame.action, params: frame.params })
+      return Promise.resolve({ success: true, result: { forwarded: true } })
+    }
+
+    const pending = h.wait({ selector: "#pan", frameId: FRAME_ID })
+    await settle()
+    // the stale entry is gone, so the frame has to be admitted afresh
+    expect(h.frames.list(h.tabId)).toEqual([])
+    h.env.advance(100)
+    await settle()
+    expect(attempts).toBe(1)
+
+    await observe(h)
+    await settle()
+
+    expect(await pending).toEqual({ tabId: h.tabId, frameId: FRAME_ID, forwarded: true })
+    expect(attempts).toBe(2)
+    expect(h.sent[0]?.params).toEqual({ selector: "#pan", timeout: 9800 })
+    expect(h.env.pendingTimers()).toBe(0)
+  })
+
+  test("gives up with FRAME_NOT_OBSERVED when the frame never answers again", async () => {
+    const h = frameHarness()
+    await observe(h)
+    let attempts = 0
+    h.browser.sendMessageHandler = () => {
+      attempts++
+      return Promise.reject(new Error(MISSING))
+    }
+    const pending = caught(h.wait({ selector: "#pan", frameId: FRAME_ID, timeout: 500 }))
+    for (let i = 0; i < 8; i++) {
+      await settle()
+      h.env.advance(100)
+    }
+    await settle()
+
+    expect((await pending).message).toBe(notObserved(h.tabId, FRAME_ID))
+    expect(attempts).toBe(1)
+    expect(h.env.pendingTimers()).toBe(0)
+  })
+
+  test("frameId 0 still waits for the tab to finish loading", async () => {
+    const h = frameHarness({ status: "loading" })
+    const pending = h.wait({ selector: "h1", frameId: 0 })
+    await settle()
+    expect(h.browser.tabsUpdated.listeners.length).toBe(1)
+    expect(h.sent).toEqual([])
+
+    h.env.advance(300)
+    h.browser.emitTabUpdated(h.tabId, { status: "complete" })
+
+    expect(await pending).toEqual({ tabId: h.tabId, forwarded: true })
+    expect(h.sent[0]?.params).toEqual({ selector: "h1", timeout: 9600 })
+  })
+
+  test("frameId 0 keeps the url wait in the background", async () => {
+    const h = frameHarness()
+
+    expect(await h.wait({ url: "https://example.com/*", frameId: 0 })).toMatchObject({
+      tabId: h.tabId,
+      matched: "https://example.com/",
+      found: true,
+    })
+    expect(h.browser.sentMessages).toEqual([])
   })
 })
