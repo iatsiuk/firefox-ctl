@@ -25,6 +25,8 @@ describe("manifest.json", () => {
     const pkg = await readPackage()
     expect(manifest.version).toBe(pkg.version)
     expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/)
+    // child-frame observation is a new capability, so the minor version moves
+    expect(manifest.version).toBe("1.1.0")
   })
 
   test("declares the gecko id and minimum Firefox version from docs/architecture.md", async () => {
@@ -58,7 +60,15 @@ describe("manifest.json", () => {
     const manifest = await readManifest()
     const permissions = manifest.permissions as string[]
     expect([...permissions].sort()).toEqual(
-      ["<all_urls>", "nativeMessaging", "storage", "tabGroups", "tabs", "webRequest"].sort(),
+      [
+        "<all_urls>",
+        "nativeMessaging",
+        "storage",
+        "tabGroups",
+        "tabs",
+        "webNavigation",
+        "webRequest",
+      ].sort(),
     )
   })
 

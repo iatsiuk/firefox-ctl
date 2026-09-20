@@ -5,6 +5,7 @@ import { AttachedTabs } from "./attached"
 import type { Browser } from "./browser"
 import { CaptureLocks } from "./capture-locks"
 import type { Environment } from "./env"
+import { FrameRegistry } from "./frames"
 import { attachTab, detachTab, listAllTabs } from "./handlers/attached"
 import { getNetworkRequests } from "./handlers/devtools"
 import { PAGE_COMMANDS, pageHandlers } from "./handlers/dom"
@@ -46,6 +47,8 @@ export interface Services {
   readonly network: NetworkTracker
   /** One capture lock per live tab, shared by every screenshot of that tab. */
   readonly captureLocks: CaptureLocks
+  /** Which child frames of which tabs are observed and can answer a command. */
+  readonly frames: FrameRegistry
   /** Injected so a capture can be tested without driving the whole pipeline. */
   readonly readiness: ReadinessCheck
 }
@@ -334,7 +337,7 @@ export const ping: Handler = (_params, { env }) => ({ pong: true, timestamp: env
 export const version: Handler = (_params, { browser }) => ({
   extension: browser.runtime.getManifest().version,
   // grows as later plans add capabilities
-  features: ["sessions", "dom", "devtools"],
+  features: ["sessions", "dom", "devtools", "frames"],
 })
 
 /** Every command of the session, window, tab and page plans, plus the two probes. */
@@ -346,6 +349,7 @@ export function createDispatcher(browser: Browser, env: Environment): Dispatcher
     attached: new AttachedTabs(browser, env),
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
+    frames: new FrameRegistry(env),
     readiness: waitForPageReady,
   })
   dispatcher.register("ping", ping)

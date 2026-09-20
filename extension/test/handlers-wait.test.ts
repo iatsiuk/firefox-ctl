@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test"
 import { AttachedTabs } from "../src/attached"
 import { CaptureLocks } from "../src/capture-locks"
 import type { HandlerDeps } from "../src/dispatch"
+import { FrameRegistry } from "../src/frames"
 import { pageHandlers } from "../src/handlers/dom"
 import { waitForUrl } from "../src/handlers/wait"
 import { NetworkTracker } from "../src/network"
@@ -52,6 +53,7 @@ function harness(options: { url?: string; timeout?: number; status?: string } = 
     attached,
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
+    frames: new FrameRegistry(env),
     readiness: waitForPageReady,
     ctx: commandContext(params, env),
   }

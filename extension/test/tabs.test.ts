@@ -4,6 +4,7 @@ import { AttachedTabs } from "../src/attached"
 import type { Tab } from "../src/browser"
 import { CaptureLocks } from "../src/capture-locks"
 import type { HandlerDeps } from "../src/dispatch"
+import { FrameRegistry } from "../src/frames"
 import {
   closeTab,
   closeWindow,
@@ -56,6 +57,7 @@ function harness(browser = new FakeBrowser()): Harness {
     attached,
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
+    frames: new FrameRegistry(env),
     readiness: waitForPageReady,
     ctx: commandContext({}, env),
   }

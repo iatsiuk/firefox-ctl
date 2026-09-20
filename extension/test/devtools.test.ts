@@ -4,6 +4,7 @@ import { AttachedTabs } from "../src/attached"
 import type { CompletedDetails, RequestDetails, StorageArea } from "../src/browser"
 import { CaptureLocks } from "../src/capture-locks"
 import type { HandlerDeps } from "../src/dispatch"
+import { FrameRegistry } from "../src/frames"
 import { getNetworkRequests } from "../src/handlers/devtools"
 import { NetworkTracker } from "../src/network"
 import type { JsonObject } from "../src/protocol"
@@ -38,6 +39,7 @@ function harness(): Harness {
     attached,
     network,
     captureLocks: new CaptureLocks(),
+    frames: new FrameRegistry(env),
     readiness: waitForPageReady,
     ctx: commandContext({}, env),
   }

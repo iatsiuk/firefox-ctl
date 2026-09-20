@@ -9,6 +9,7 @@ import { ATTACHED_TABS_KEY, AttachedTabs } from "../src/attached"
 import type { Tab, TabCreateProperties } from "../src/browser"
 import { CaptureLocks } from "../src/capture-locks"
 import { createDispatcher, Dispatcher } from "../src/dispatch"
+import { FrameRegistry } from "../src/frames"
 import { NetworkTracker } from "../src/network"
 import type { HostCommand, JsonObject } from "../src/protocol"
 import { waitForPageReady } from "../src/readiness"
@@ -27,6 +28,7 @@ function services(browser: FakeBrowser, env: FakeEnvironment) {
     attached: new AttachedTabs(browser, env),
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
+    frames: new FrameRegistry(env),
     readiness: waitForPageReady,
   }
 }

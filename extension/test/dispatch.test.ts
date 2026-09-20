@@ -3,6 +3,7 @@ import { ATTACHED_TABS_KEY, AttachedTabs } from "../src/attached"
 import { CaptureLocks } from "../src/capture-locks"
 import type { Services } from "../src/dispatch"
 import { createDispatcher, Dispatcher, describeTabError } from "../src/dispatch"
+import { FrameRegistry } from "../src/frames"
 import { NetworkTracker } from "../src/network"
 import type { CommandName, HostCommand, JsonObject } from "../src/protocol"
 import { ExtensionError } from "../src/protocol"
@@ -29,6 +30,7 @@ function deps(browser: FakeBrowser, env: FakeEnvironment): Services {
     attached: new AttachedTabs(browser, env),
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
+    frames: new FrameRegistry(env),
     readiness: waitForPageReady,
   }
 }
@@ -54,7 +56,7 @@ describe("Dispatcher core commands", () => {
       success: true,
       result: {
         extension: "0.4.2",
-        features: ["sessions", "dom", "devtools"],
+        features: ["sessions", "dom", "devtools", "frames"],
       },
     })
     const result = (response as { result: Record<string, unknown> }).result

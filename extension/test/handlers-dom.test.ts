@@ -7,6 +7,7 @@ import commandTable from "../src/commands.json"
 import { INTERNAL_ACTIONS } from "../src/content/actions"
 import type { HandlerDeps } from "../src/dispatch"
 import { createDispatcher } from "../src/dispatch"
+import { FrameRegistry } from "../src/frames"
 import { executeInTab, PAGE_COMMANDS, pageHandlers } from "../src/handlers/dom"
 import { NetworkTracker } from "../src/network"
 import { pageActions } from "../src/page"
@@ -47,6 +48,7 @@ function harness(options: { url?: string; active?: boolean } = {}): Harness {
     attached,
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
+    frames: new FrameRegistry(env),
     readiness: waitForPageReady,
     ctx: commandContext({}, env),
   }
@@ -366,7 +368,7 @@ describe("registration", () => {
     }
   })
 
-  test("version announces the dom feature", async () => {
+  test("version announces the dom and frames features", async () => {
     const browser = new FakeBrowser()
     const response = await createDispatcher(browser, new FakeEnvironment({})).handle({
       id: "frame-1",
@@ -377,7 +379,7 @@ describe("registration", () => {
 
     expect(response).toMatchObject({
       success: true,
-      result: { features: ["sessions", "dom", "devtools"] },
+      result: { features: ["sessions", "dom", "devtools", "frames"] },
     })
   })
 })

@@ -6,6 +6,7 @@ import { start } from "../src/app"
 import { AttachedTabs } from "../src/attached"
 import { CaptureLocks } from "../src/capture-locks"
 import { createDispatcher, Dispatcher } from "../src/dispatch"
+import { FrameRegistry } from "../src/frames"
 import { NetworkTracker } from "../src/network"
 import type { HostCommand, JsonObject } from "../src/protocol"
 import { commandContext } from "../src/protocol"
@@ -25,6 +26,7 @@ function services(browser: FakeBrowser, env: FakeEnvironment) {
     attached: new AttachedTabs(browser, env),
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
+    frames: new FrameRegistry(env),
     readiness: waitForPageReady,
   }
 }

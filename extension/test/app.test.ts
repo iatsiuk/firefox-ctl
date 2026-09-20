@@ -92,10 +92,34 @@ describe("start", () => {
         success: true,
         result: {
           extension: "0.4.2",
-          features: ["sessions", "dom", "devtools"],
+          features: ["sessions", "dom", "devtools", "frames"],
         },
       },
     ])
+  })
+
+  test("attaches the frame registry to navigation, connect and tab removal", async () => {
+    const browser = new FakeBrowser({
+      tabs: [{ id: 16, windowId: 1, url: "https://example.com/" }],
+    })
+    const removalListeners = browser.tabsRemoved.listeners.length
+    const { dispatcher } = start(browser, new FakeEnvironment())
+    const { frames } = dispatcher.deps
+
+    expect(browser.framesLoaded.listeners).toHaveLength(1)
+    expect(browser.runtimeConnections.listeners).toHaveLength(1)
+    expect(browser.tabsRemoved.listeners.length).toBeGreaterThan(removalListeners)
+
+    // the navigation listener is the registry's: a watched tab injects on it
+    frames.watch(16)
+    browser.emitFrameLoaded({ tabId: 16, frameId: 7, url: "https://embed.example.com/card" })
+    expect(browser.executeScriptCalls).toEqual([
+      { tabId: 16, details: { frameId: 7, file: "/dist/content.js", runAt: "document_idle" } },
+    ])
+
+    // and the removal listener drops the watch with the tab
+    browser.removeTab(16)
+    expect(frames.isWatched(16)).toBe(false)
   })
 
   test("answers an unimplemented command with UNKNOWN_COMMAND", async () => {
@@ -373,13 +397,14 @@ describe("devtools and screenshot over host frames", () => {
     expect(browser.captures).toEqual([{ tabId, options: { format: "jpeg", quality: 60 } }])
   })
 
-  test("version announces the devtools feature", async () => {
+  test("version announces the devtools and frames features", async () => {
     const { port } = await managed()
 
     expect(result(await run(port, "v", "version")).features).toEqual([
       "sessions",
       "dom",
       "devtools",
+      "frames",
     ])
   })
 })
