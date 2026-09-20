@@ -114,7 +114,15 @@ describe("start", () => {
     frames.watch(16)
     browser.emitFrameLoaded({ tabId: 16, frameId: 7, url: "https://embed.example.com/card" })
     expect(browser.executeScriptCalls).toEqual([
-      { tabId: 16, details: { frameId: 7, file: "/dist/content.js", runAt: "document_idle" } },
+      {
+        tabId: 16,
+        details: {
+          frameId: 7,
+          file: "/dist/content.js",
+          runAt: "document_idle",
+          matchAboutBlank: true,
+        },
+      },
     ])
 
     // and the removal listener drops the watch with the tab

@@ -999,7 +999,15 @@ describe("a watched child frame", () => {
     browser.emitFrameLoaded({ tabId, frameId: FRAME_ID, url: FRAME_URL })
     await flush()
     expect(browser.executeScriptCalls).toEqual([
-      { tabId, details: { frameId: FRAME_ID, file: "/dist/content.js", runAt: "document_idle" } },
+      {
+        tabId,
+        details: {
+          frameId: FRAME_ID,
+          file: "/dist/content.js",
+          runAt: "document_idle",
+          matchAboutBlank: true,
+        },
+      },
     ])
 
     // injected but not connected yet: the frame cannot answer a command

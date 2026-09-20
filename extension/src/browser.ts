@@ -122,6 +122,9 @@ export interface ExecuteScriptDetails {
   frameId?: number
   file: string
   runAt?: "document_start" | "document_end" | "document_idle"
+  // Firefox refuses to inject into about:blank and about:srcdoc frames unless
+  // this is set; zoid-style provider frames stay on one of those permanently
+  matchAboutBlank?: boolean
 }
 
 export interface Tabs {

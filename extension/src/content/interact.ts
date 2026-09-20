@@ -2,7 +2,7 @@
 // result shapes and key code maps.
 
 import type { JsonObject, JsonValue } from "../protocol"
-import type { Page } from "./page"
+import { isPageActive, type Page } from "./page"
 import {
   autoWaitTimeout,
   pollUntil,
@@ -131,6 +131,15 @@ async function requireTextTarget(
   }
 }
 
+// checked right before every DOM mutation: a poll that resolved while the
+// frame was still active can still be deactivated during the scroll-settle
+// wait that follows, and the mutation must not land after that
+function requireActive(page: Page): void {
+  if (!isPageActive(page)) {
+    throw new Error("frame is deactivated")
+  }
+}
+
 function clickResult(
   element: HTMLElement,
   selector: string | null,
@@ -156,6 +165,7 @@ export async function click(params: JsonObject, page: Page): Promise<JsonValue> 
     element.scrollIntoView({ behavior: "smooth", block: "center" })
     // let the smooth scroll settle before the click lands
     await nextFrame(page)
+    requireActive(page)
     // read before the click: a handler that hides or removes the button must
     // not change what the result reports
     const text = visibleText(element)
@@ -164,6 +174,7 @@ export async function click(params: JsonObject, page: Page): Promise<JsonValue> 
   }
 
   const element = await requireTextTarget(params, page, target.text, target.scope)
+  requireActive(page)
   // generated before the click: a click that removes its own element or starts
   // a navigation must not be reported as failed
   const selector = describeTarget(page, element)
@@ -188,6 +199,7 @@ export async function type(params: JsonObject, page: Page): Promise<JsonValue> {
   const text = String(params.text)
   const clear = boolParam(params.clear, true)
   const { selector, element } = await requireElement(params, page, "type")
+  requireActive(page)
 
   const tag = element.tagName
   const isInput = tag === "INPUT" || tag === "TEXTAREA"

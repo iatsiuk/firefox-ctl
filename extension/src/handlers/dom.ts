@@ -127,11 +127,15 @@ export async function executeInFrame(
   if (frameId !== 0 && !deps.frames.isObserved(tabId, frameId)) {
     throw frameNotObserved(tabId, frameId)
   }
+  // captured before the send: classifying a missing receiver awaits a tab
+  // lookup, and the frame may reconnect in that gap, so forget must drop only
+  // the entry the send actually met, not whatever replaced it since
+  const port = frameId !== 0 ? deps.frames.currentPort(tabId, frameId) : undefined
   try {
     return await executeInTab(deps.browser, tabId, action, params, frameId)
   } catch (error) {
     if (frameId !== 0 && error instanceof ExtensionError && error.code === "FRAME_NOT_OBSERVED") {
-      deps.frames.forget(tabId, frameId)
+      deps.frames.forget(tabId, frameId, port)
     }
     throw error
   }

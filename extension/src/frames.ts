@@ -151,9 +151,27 @@ export class FrameRegistry {
     return watch ? sorted(watch) : []
   }
 
-  /** Drops one entry, for a send that met a receiver already gone. */
-  forget(tabId: number, frameId: number): void {
-    this.watches.get(tabId)?.frames.delete(frameId)
+  /** The port of a frame's current entry, so a caller can tell a stale send apart from a fresh reconnect admitted while it was in flight. */
+  currentPort(tabId: number, frameId: number): Port | undefined {
+    return this.watches.get(tabId)?.frames.get(frameId)?.port
+  }
+
+  /**
+   * Drops one entry, for a send that met a receiver already gone. Given
+   * `port`, the entry is only dropped when it is still the one the send was
+   * aimed at: classifying a missing receiver takes a tab lookup, and the frame
+   * may reconnect in that gap, so an unconditional delete could drop the fresh
+   * entry rather than the stale one. Without `port` the entry goes regardless.
+   */
+  forget(tabId: number, frameId: number, port?: Port): void {
+    const watch = this.watches.get(tabId)
+    if (!watch) {
+      return
+    }
+    if (port !== undefined && watch.frames.get(frameId)?.port !== port) {
+      return
+    }
+    watch.frames.delete(frameId)
   }
 
   /** The last injection failure of this frame, cleared once it connects. */
@@ -238,6 +256,10 @@ export class FrameRegistry {
         frameId,
         file: FRAME_SCRIPT_FILE,
         runAt: "document_idle",
+        // zoid-style provider frames (a hidden mediator, a field before its
+        // first real navigation) can sit on about:blank or about:srcdoc; the
+        // "every child frame" promise of watchFrames covers those too
+        matchAboutBlank: true,
       })
     } catch (error) {
       const watch = this.watches.get(tabId)

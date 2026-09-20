@@ -3,7 +3,7 @@
 // `scanTimeout`, measured on the page clock.
 
 import type { JsonObject, JsonValue } from "../protocol"
-import type { Page } from "./page"
+import { isPageActive, type Page } from "./page"
 import { nextFrame } from "./timing"
 import { isRendered } from "./visibility"
 
@@ -201,6 +201,9 @@ export async function handleConsent(params: JsonObject, page: Page): Promise<Jso
   found.element.scrollIntoView({ behavior: "smooth", block: "center" })
   // let the smooth scroll settle, as `click` does, so the banner is in view
   await nextFrame(page)
+  if (!isPageActive(page)) {
+    throw new Error("frame is deactivated")
+  }
   found.element.click()
 
   return {

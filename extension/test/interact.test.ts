@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 
 import { click, pressKey, type as typeAction } from "../src/content/interact"
+import { deactivatePage } from "../src/content/page"
 import type { JsonObject } from "../src/protocol"
 import {
   assertResolves,
@@ -104,6 +105,26 @@ describe("click", () => {
     await page.advance(1000)
     expect(result(await pending).clicked).toBe(true)
     expect(page.now()).toBeGreaterThanOrEqual(250)
+  })
+
+  test("never clicks a target that appears after the page is deactivated", async () => {
+    const page = fakePage()
+    const settled = rejection(click({ selector: "#late", waitTimeout: 1000 }, page))
+    page.setTimeout(() => deactivatePage(page), 200)
+    // well inside the 1000ms waitTimeout: a poller that kept looking after
+    // deactivation would find and click this
+    let clicks = 0
+    page.setTimeout(() => {
+      document.body.innerHTML = '<button id="late">later</button>'
+      recordScrollIntoView(el("#late"))
+      el("#late").addEventListener("click", () => {
+        clicks++
+      })
+    }, 400)
+
+    await page.advance(1000)
+    await settled
+    expect(clicks).toBe(0)
   })
 
   test("fails immediately with suggestions when autoWait is off", async () => {
@@ -499,6 +520,26 @@ describe("click by text", () => {
     expect(clicks()).toBe(1)
   })
 
+  test("never clicks by text once the page is deactivated during the settle wait", async () => {
+    const page = mount('<button id="apply">Apply</button>')
+    const button = el("#apply")
+    const clicks = counter(button)
+    // the match is found while still active; deactivation lands in the
+    // scroll-settle wait that follows, before the click itself
+    Object.defineProperty(button, "scrollIntoView", {
+      configurable: true,
+      value: () => {
+        deactivatePage(page)
+      },
+    })
+
+    const settled = rejection(click({ text: "Apply" }, page))
+    await page.advance(0)
+
+    await settled
+    expect(clicks()).toBe(0)
+  })
+
   test("refuses selector and text together before any lookup", async () => {
     const page = mount('<button id="go">Apply</button>')
 
@@ -691,6 +732,24 @@ describe("type", () => {
     const error = await rejection(pending)
     expect(error.message).toContain("Element not found: #queyr")
     expect(error.message).toContain(errors.notFoundHint)
+  })
+
+  test("never types into a target that appears after the page is deactivated", async () => {
+    document.body.innerHTML = ""
+    const page = fakePage()
+    const settled = rejection(
+      typeAction({ selector: "#late", text: "4111", waitTimeout: 1000 }, page),
+    )
+    page.setTimeout(() => deactivatePage(page), 200)
+    // well inside the 1000ms waitTimeout: a poller that kept looking after
+    // deactivation would find this and type into it
+    page.setTimeout(() => {
+      document.body.innerHTML = '<input id="late">'
+    }, 400)
+
+    await page.advance(1000)
+    await settled
+    expect((el("#late") as HTMLInputElement).value).toBe("")
   })
 })
 

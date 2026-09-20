@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { AttachedTabs } from "../src/attached"
-import type { StorageArea } from "../src/browser"
+import type { StorageArea, Tab } from "../src/browser"
 import { CaptureLocks } from "../src/capture-locks"
 import commandTable from "../src/commands.json"
 import { INTERNAL_ACTIONS } from "../src/content/actions"
@@ -490,6 +490,45 @@ describe("frame routing", () => {
 
     await expect(h.run("click", { selector: "#go" })).rejects.toThrow(/^RESTRICTED_PAGE: /)
     expect(h.frames.list(h.tabId)).toHaveLength(1)
+  })
+
+  test("keeps a frame that reconnected while a stale send was still being classified", async () => {
+    const h = harness({ url: "about:config" })
+    await observe(h)
+    let sendAttempted = false
+    h.browser.sendMessageHandler = () => {
+      sendAttempted = true
+      return Promise.reject(new Error(RECEIVING_END))
+    }
+
+    // classifying the missing receiver awaits tabs.get; hold open the call
+    // that follows the rejected send (an earlier one resolves the session's
+    // own tab lookup) so the frame can reconnect before forget runs
+    let releaseGet: (() => void) | undefined
+    const originalGet = h.browser.tabs.get
+    const gateEntered = new Promise<void>((resolveEntered) => {
+      h.browser.tabs.get = (tabId: number): Promise<Tab> => {
+        if (!sendAttempted) {
+          return originalGet(tabId)
+        }
+        return new Promise((resolve, reject) => {
+          releaseGet = () => {
+            originalGet(tabId).then(resolve, reject)
+          }
+          resolveEntered()
+        })
+      }
+    })
+
+    const pending = h.run("click", { selector: "#go", frameId: FRAME_ID })
+    await gateEntered
+    await observe(h, FRAME_ID, FRAME_URL)
+    releaseGet?.()
+
+    await expect(pending).rejects.toThrow(notObserved(h.tabId, FRAME_ID))
+    expect(h.frames.list(h.tabId)).toEqual([
+      { frameId: FRAME_ID, url: FRAME_URL, parentFrameId: 0 },
+    ])
   })
 })
 

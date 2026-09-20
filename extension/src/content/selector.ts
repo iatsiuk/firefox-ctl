@@ -1,7 +1,7 @@
 // Selector validation and lookup shared by every DOM action. The error texts
 // are pinned by test/fixtures/errors.json.
 
-import type { Page } from "./page"
+import { isPageActive, type Page } from "./page"
 import { nextFrame, sleep } from "./timing"
 
 const maxSelectorLength = 1000
@@ -59,6 +59,11 @@ export async function pollUntil<T>(
   const start = page.now()
   while (page.now() - start < timeout) {
     await nextFrame(page)
+    // a deactivated frame must never resume the search that led here: the next
+    // probe could find the element and hand it straight to a DOM mutation
+    if (!isPageActive(page)) {
+      return null
+    }
     const found = probe()
     if (found !== null) {
       return found

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 
+import { deactivatePage } from "../src/content/page"
 import { safeQuerySelector, smartQuerySelector, validateSelector } from "../src/content/selector"
 import { fakePage } from "./dom"
 import errors from "./fixtures/errors.json"
@@ -100,6 +101,18 @@ describe("smartQuerySelector", () => {
     const page = fakePage()
     await expect(smartQuerySelector(page, "#never", { autoWait: false })).resolves.toBeNull()
     expect(page.pending()).toBe(0)
+  })
+
+  test("stops polling once the page is deactivated, even before the element appears", async () => {
+    const page = fakePage()
+    const pending = smartQuerySelector(page, "#late", { timeout: 1000 })
+    page.setTimeout(() => deactivatePage(page), 200)
+    page.setTimeout(() => {
+      document.body.innerHTML = "<div id='late'></div>"
+    }, 400)
+
+    await page.advance(1000)
+    await expect(pending).resolves.toBeNull()
   })
 
   test("validates the selector before polling", async () => {

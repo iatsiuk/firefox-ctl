@@ -53,6 +53,26 @@ export interface Page {
   inputValueSetter(element: Element): ((value: string) => void) | undefined
 }
 
+// one Page instance is built per content-script execution and threads through
+// every action call for that frame's lifetime, so the flag lives on it rather
+// than on the window: the window also carries the re-injection guard, which
+// must survive across a fresh Page for a second execution, while this flag
+// must not
+const ACTIVE_KEY = "__firefoxCtlActive"
+
+/** Whether the frame may still touch its document; unset means yes. */
+export function isPageActive(page: Page): boolean {
+  return Reflect.get(page, ACTIVE_KEY) !== false
+}
+
+/**
+ * Marks a page inactive so a poller already in flight stops before its next
+ * probe and never reaches the DOM mutation waiting on it.
+ */
+export function deactivatePage(page: Page): void {
+  Reflect.set(page, ACTIVE_KEY, false)
+}
+
 export function nativeValueSetter(element: Element): ((value: string) => void) | undefined {
   const tag = element.tagName
   if (tag !== "INPUT" && tag !== "TEXTAREA") {

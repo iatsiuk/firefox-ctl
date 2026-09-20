@@ -6,7 +6,7 @@
 import type { Browser } from "./browser"
 import { pageActions } from "./content/actions"
 import { resetConsoleCapture } from "./content/console"
-import type { Page } from "./content/page"
+import { deactivatePage, isPageActive, type Page } from "./content/page"
 import type { ActionMap } from "./content/registry"
 import { handleAction } from "./content/registry"
 import { FRAME_DEACTIVATED, FRAME_PORT_NAME, isDeactivateMessage } from "./frame-port"
@@ -45,9 +45,11 @@ export function startPage(browser: Browser, page: Page, actions: ActionMap = pag
  * background restarted, the registry refused the port - is just as final.
  */
 function connectFrame(browser: Browser, page: Page): ActiveCheck {
-  let active = true
   const stop = (): void => {
-    active = false
+    // the same flag a poller checks before its next probe and before a DOM
+    // mutation, so an action already in flight stops touching the document
+    // rather than merely losing its reply
+    deactivatePage(page)
     // console capture belongs to the watch: a frame nobody observes leaves the
     // document's console and its error listeners as it found them
     resetConsoleCapture(page)
@@ -59,7 +61,7 @@ function connectFrame(browser: Browser, page: Page): ActiveCheck {
     }
   })
   port.onDisconnect.addListener(stop)
-  return () => active
+  return () => isPageActive(page)
 }
 
 // checked twice: an action never starts in a deactivated frame, and one that

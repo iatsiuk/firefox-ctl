@@ -158,6 +158,25 @@ describe("startPage in a child frame", () => {
     await page.advance(1000)
     expect(doc.querySelector<HTMLInputElement>("#late")?.value).toBe("")
   })
+
+  test("stops the poll itself once deactivation arrives, before its own timeout", async () => {
+    const { browser, page, doc } = side(false)
+    startPage(browser, page)
+
+    const answer = browser.emitRuntimeMessage({
+      action: "type",
+      params: { selector: "#late", text: "4111", waitTimeout: 1000 },
+    })
+    await page.advance(200)
+    framePort(browser).emitMessage(DEACTIVATE_MESSAGE)
+    // still well inside the 1000ms waitTimeout: a poller that kept looking
+    // would find this and type into it before the timeout ever fires
+    doc.body.innerHTML = '<input id="late">'
+    await page.advance(800)
+
+    await expect(answer).resolves.toEqual({ success: false, error: DEACTIVATED })
+    expect(doc.querySelector<HTMLInputElement>("#late")?.value).toBe("")
+  })
 })
 
 describe("console capture in a child frame", () => {

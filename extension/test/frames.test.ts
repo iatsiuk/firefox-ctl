@@ -152,7 +152,12 @@ describe("injection", () => {
     expect(h.browser.executeScriptCalls).toEqual([
       {
         tabId: TAB_ID,
-        details: { frameId: FRAME_ID, file: FRAME_SCRIPT_FILE, runAt: "document_idle" },
+        details: {
+          frameId: FRAME_ID,
+          file: FRAME_SCRIPT_FILE,
+          runAt: "document_idle",
+          matchAboutBlank: true,
+        },
       },
     ])
   })

@@ -363,6 +363,15 @@ One limit worth naming: a frame document restored from the BFCache fires no
 `FRAME_NOT_OBSERVED`, never a stale answer from a document that stopped listening - and the
 recovery is to make the frame load again.
 
+A second one: a frame that reloads to the exact same url before its first injection has
+connected is treated as the same document loading twice, not a fresh one, because frame
+identity here is `tabId` + `frameId` + url, and Firefox has no simpler handle on it without
+`documentId`. The failure is the same clean shape - `FRAME_NOT_OBSERVED` - never a stale answer
+from the wrong document. Recovery needs a fresh load after a fresh watch: `unwatchFrames` then
+`watchFrames` before the frame navigates again. Watching again on its own does not reach a
+document already stuck this way, since v1 has no backfill of frames already open (see above);
+only a subsequent navigation is injected under the new generation.
+
 ## DevTools
 
 | Command | Params | Notes |
