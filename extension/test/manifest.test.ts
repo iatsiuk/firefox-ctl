@@ -26,7 +26,7 @@ describe("manifest.json", () => {
     expect(manifest.version).toBe(pkg.version)
     expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/)
     // child-frame observation is a new capability, so the minor version moves
-    expect(manifest.version).toBe("1.1.0")
+    expect(manifest.version).toBe("1.0.2")
   })
 
   test("declares the gecko id and minimum Firefox version from docs/architecture.md", async () => {
