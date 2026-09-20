@@ -91,6 +91,20 @@ async function observe(
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
+describe("attach", () => {
+  test("subscribes once however often it is called", () => {
+    const browser = new FakeBrowser()
+    const frames = new FrameRegistry(new FakeEnvironment({}))
+
+    frames.attach(browser)
+    frames.attach(browser)
+
+    expect(browser.framesLoaded.listeners).toHaveLength(1)
+    expect(browser.runtimeConnections.listeners).toHaveLength(1)
+    expect(browser.tabsRemoved.listeners).toHaveLength(1)
+  })
+})
+
 describe("watch", () => {
   test("stores the watch and leaves other tabs alone", () => {
     const h = harness()

@@ -515,6 +515,27 @@ describe("frameId on a command that has no frame", () => {
     })
     expect(browser.sentMessages).toHaveLength(0)
   })
+
+  test("frameId: 0 is refused too, not treated as absent", async () => {
+    const browser = new FakeBrowser()
+    const dispatcher = createDispatcher(browser, new FakeEnvironment({}))
+    const command = "ping"
+    expect(others).toContain(command)
+
+    const response = await dispatcher.handle({
+      id: "frame-0",
+      type: "command",
+      command,
+      params: { frameId: 0 },
+    })
+
+    expect(response).toEqual({
+      id: "frame-0",
+      success: false,
+      error: `frameId is not supported by ${command}.`,
+    })
+    expect(browser.sentMessages).toHaveLength(0)
+  })
 })
 
 describe("registration", () => {

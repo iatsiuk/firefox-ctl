@@ -27,6 +27,7 @@ page (`options.html`), which carries the two switches described under "User-faci
 | `tabGroups` | the managed tabs are put in a tab group named `firefox-ctl` so the user can see at a glance which tabs the terminal owns; only `tabGroups.query` and `tabGroups.update` are called |
 | `<all_urls>` | the user names the page to drive, so no narrower host list is possible; it backs the content script, `tabs.captureTab` and the network log |
 | `webRequest` | `getNetworkRequests` reports request and response metadata, and the screenshot readiness check waits for a tab's pending requests to settle. Listeners are read-only: there is no `webRequestBlocking`, nothing is redirected and no request body is read |
+| `webNavigation` | `watchFrames` listens for `onDOMContentLoaded` to inject the content script into a matching child frame of a watched tab. Only the frame id, parent frame id and document url of that one tab are read, never a request body |
 | `storage` | two `storage.local` keys hold the managed window id and the attached tab ids so a background restart re-adopts the same window instead of opening a second one, plus the two preference flags. No page data is stored |
 
 ## Data collection

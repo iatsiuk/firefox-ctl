@@ -47,7 +47,6 @@ interface PendingInjection extends FrameInfo {
 
 interface ObservedFrame extends FrameInfo {
   port: Port
-  generation: number
 }
 
 interface FrameWait {
@@ -286,7 +285,6 @@ export class FrameRegistry {
       url: pending.url,
       parentFrameId: pending.parentFrameId,
       port,
-      generation: watch.generation,
     })
     port.onDisconnect.addListener(() => {
       this.frameDisconnected(tabId, frameId, port)
