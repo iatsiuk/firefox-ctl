@@ -200,6 +200,9 @@ export class FakeBrowser implements Browser {
     options?: SendMessageOptions,
   ) => Promise<unknown>
   executeScriptHandler?: (tabId: number, details: ExecuteScriptDetails) => Promise<unknown[]>
+  // Firefox fills the sender in on the receiving end of a runtime port; a fake
+  // content side sets it so the background can admit the port it opens
+  connectSender?: MessageSender
   captureHandler?: (tabId: number, options?: CaptureOptions) => Promise<string>
   currentWindowId = 1
   allowedIncognitoAccess: boolean
@@ -384,7 +387,7 @@ export class FakeBrowser implements Browser {
   }
 
   private connect(info: ConnectInfo): Port {
-    const port = new FakePort({ name: info.name })
+    const port = new FakePort({ name: info.name, sender: this.connectSender })
     this.connectedPorts.push(port)
     return port
   }

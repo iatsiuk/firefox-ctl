@@ -16,7 +16,7 @@ import { startPage } from "../src/page"
 import type { ExtensionResponse, HostCommand, JsonObject } from "../src/protocol"
 import { ERROR_CODES } from "../src/protocol"
 import { writeEvaluateEnabled } from "../src/settings"
-import { stubRect, stubTop } from "./dom"
+import { childWindow, fakePage, stubRect, stubTop } from "./dom"
 import { FakeBrowser, FakeEnvironment, type FakePort } from "./fakes"
 import errors from "./fixtures/errors.json"
 
@@ -359,7 +359,7 @@ let contentBrowser: FakeBrowser | undefined
  * background page's frame travels the registry over happy-dom, so a page
  * command is answered by the action it names, not by a scripted reply.
  */
-function contentTab(browser: FakeBrowser): void {
+function contentTab(browser: FakeBrowser): FakeBrowser {
   document.title = "Fixture page"
   document.body.innerHTML = FIXTURE_HTML
   // happy-dom has no layout and the text resolver walks from the root, so
@@ -378,6 +378,7 @@ function contentTab(browser: FakeBrowser): void {
     }
     return content.emitRuntimeMessage(message)
   }
+  return content
 }
 
 /** The row of `docs/commands.md` describing one command. */
@@ -902,5 +903,210 @@ describe("the whole command table", () => {
         `${command} frameId: false`,
       )
     }
+  })
+})
+
+/** One zoid-style payment frame of the stage checkout, as Yuno mounts it. */
+const FRAME_ID = 7
+const FRAME_MATCH = "*secured-fields*"
+const FRAME_URL = "https://sdk-web-card.sandbox.y.uno/v1.88.5/pages/secured-fields.html#pan"
+const CARD_NUMBER = "4111111111111111"
+
+const FRAME_HTML = `
+  <main>
+    <label for="pan">Card number</label>
+    <input id="pan" name="cardNumber" type="text" placeholder="Card number">
+  </main>
+`
+
+// not in fixtures/errors.json: the fixture pins the texts of the earlier plans
+const notObserved = (tabId: number): string =>
+  `FRAME_NOT_OBSERVED: frame ${FRAME_ID} of tab ${tabId} is not observed; ` +
+  "call watchFrames before the frame loads or reopen it"
+const FRAME_DEACTIVATED = "FRAME_NOT_OBSERVED: frame is deactivated; call watchFrames and reload it"
+
+const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+interface FrameSide {
+  browser: FakeBrowser
+  doc: Document
+  port: FakePort
+}
+
+/**
+ * The bundle `executeScript` runs inside a watched child frame: its own window,
+ * its own browser globals, and the port the background admits it on.
+ */
+function frameSide(tabId: number, frameId: number, url: string): FrameSide {
+  const { win, doc } = childWindow()
+  doc.body.innerHTML = FRAME_HTML
+  for (const target of doc.querySelectorAll("*")) {
+    stubRect(target, { width: 100, height: 20 })
+  }
+  const browser = new FakeBrowser()
+  // what the background sees on the port this document opens
+  browser.connectSender = { tab: { id: tabId }, frameId, url }
+  startPage(browser, fakePage(doc, win))
+  const port = browser.connectedPorts[0]
+  if (!port) {
+    throw new Error("the frame side opened no port")
+  }
+  return { browser, doc, port }
+}
+
+/** Delivers each send to the content side of the frame it names, as Firefox does. */
+function routeFrames(
+  browser: FakeBrowser,
+  top: FakeBrowser,
+  sides: Map<number, FakeBrowser>,
+): void {
+  browser.sendMessageHandler = (_tabId, message, options) => {
+    const frameId = options?.frameId
+    if (frameId === undefined) {
+      return Promise.reject(new Error("tabs.sendMessage was called without a frame target"))
+    }
+    const side = frameId === 0 ? top : sides.get(frameId)
+    if (!side) {
+      return Promise.reject(
+        new Error("Could not establish connection. Receiving end does not exist."),
+      )
+    }
+    return side.emitRuntimeMessage(message)
+  }
+}
+
+describe("a watched child frame", () => {
+  test("watch, inject, act, unwatch and watch again travel the port", async () => {
+    const browser = userBrowser()
+    const { port } = session(browser)
+    const top = contentTab(browser)
+    const sides = new Map<number, FakeBrowser>()
+    routeFrames(browser, top, sides)
+    const created = result(await run(port, "createWindow", { private: false }))
+    const tabId = number(created, "tabId")
+
+    expect(result(await run(port, "watchFrames", { match: FRAME_MATCH, tabId }))).toEqual({
+      tabId,
+      match: FRAME_MATCH,
+      watching: true,
+    })
+
+    // a child frame the match ignores is left alone
+    browser.emitFrameLoaded({ tabId, frameId: 9, url: "https://other.example/widget.html" })
+    await flush()
+    expect(browser.executeScriptCalls).toEqual([])
+
+    browser.emitFrameLoaded({ tabId, frameId: FRAME_ID, url: FRAME_URL })
+    await flush()
+    expect(browser.executeScriptCalls).toEqual([
+      { tabId, details: { frameId: FRAME_ID, file: "/dist/content.js", runAt: "document_idle" } },
+    ])
+
+    // injected but not connected yet: the frame cannot answer a command
+    expect(
+      await failure(port, "type", {
+        selector: "#pan",
+        text: CARD_NUMBER,
+        frameId: FRAME_ID,
+        tabId,
+      }),
+    ).toBe(notObserved(tabId))
+
+    // listFrames --timeout is a wait-for-first: it answers on the admission
+    const listing = run(port, "listFrames", { match: FRAME_MATCH, timeout: 5000, tabId })
+    await flush()
+    const frame = frameSide(tabId, FRAME_ID, FRAME_URL)
+    sides.set(FRAME_ID, frame.browser)
+    browser.emitConnect(frame.port)
+    expect(result(await listing)).toEqual({
+      tabId,
+      watching: true,
+      frames: [{ frameId: FRAME_ID, url: FRAME_URL, parentFrameId: 0 }],
+    })
+
+    const state = result(await run(port, "getPageState", { frameId: FRAME_ID, tabId }))
+    expect(state).toMatchObject({ tabId, frameId: FRAME_ID })
+    expect(state.inputs).toEqual([
+      {
+        type: "text",
+        name: "cardNumber",
+        label: "Card number",
+        value: "",
+        required: false,
+        disabled: false,
+        selector: "#pan",
+      },
+    ])
+
+    expect(
+      result(
+        await run(port, "type", {
+          selector: "#pan",
+          text: CARD_NUMBER,
+          frameId: FRAME_ID,
+          tabId,
+        }),
+      ),
+    ).toMatchObject({
+      tabId,
+      frameId: FRAME_ID,
+      selector: "#pan",
+      typed: CARD_NUMBER,
+      currentValue: CARD_NUMBER,
+    })
+    expect((frame.doc.querySelector("#pan") as HTMLInputElement).value).toBe(CARD_NUMBER)
+    // the top document is untouched and still answers without a frame
+    expect(result(await run(port, "getContent", { selector: "h1", tabId }))).toMatchObject({
+      tabId,
+      text: "Hello world",
+    })
+
+    expect(result(await run(port, "unwatchFrames", { tabId }))).toEqual({
+      tabId,
+      watching: false,
+      released: 1,
+    })
+    expect(frame.port.posted).toEqual([{ type: "deactivate" }])
+    expect(frame.port.disconnected).toBe(true)
+    // the released document also refuses on its own, until it unloads
+    await expect(frame.browser.emitRuntimeMessage({ action: "getPageState" })).resolves.toEqual({
+      success: false,
+      error: FRAME_DEACTIVATED,
+    })
+    expect(
+      await failure(port, "type", {
+        selector: "#pan",
+        text: CARD_NUMBER,
+        frameId: FRAME_ID,
+        tabId,
+      }),
+    ).toBe(notObserved(tabId))
+
+    // a new watch does not revive the released frame: it waits for the next load
+    expect(result(await run(port, "watchFrames", { tabId }))).toEqual({
+      tabId,
+      match: null,
+      watching: true,
+    })
+    expect(result(await run(port, "listFrames", { tabId }))).toEqual({
+      tabId,
+      watching: true,
+      frames: [],
+    })
+
+    browser.emitFrameLoaded({ tabId, frameId: FRAME_ID, url: FRAME_URL })
+    await flush()
+    expect(browser.executeScriptCalls).toHaveLength(2)
+    const reloaded = frameSide(tabId, FRAME_ID, FRAME_URL)
+    sides.set(FRAME_ID, reloaded.browser)
+    browser.emitConnect(reloaded.port)
+    expect(result(await run(port, "listFrames", { tabId }))).toEqual({
+      tabId,
+      watching: true,
+      frames: [{ frameId: FRAME_ID, url: FRAME_URL, parentFrameId: 0 }],
+    })
+    expect(
+      result(await run(port, "getContent", { selector: "#pan", frameId: FRAME_ID, tabId })),
+    ).toMatchObject({ tabId, frameId: FRAME_ID, selector: "#pan" })
   })
 })
