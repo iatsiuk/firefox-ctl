@@ -584,3 +584,68 @@ describe("visible text documentation", () => {
     },
   )
 })
+
+describe("child frame documentation", () => {
+  test.skipIf(root === undefined)(
+    "commands.md documents the three commands, the frame selector and its errors",
+    async () => {
+      const text = await readRootDoc(join("docs", "commands.md"))
+      for (const phrase of [
+        "## Child frames",
+        "watchFrames",
+        "unwatchFrames",
+        "listFrames",
+        "--frameId",
+        "FRAME_NOT_OBSERVED",
+        "before the frame loads",
+        "webNavigation",
+        "BFCache",
+      ]) {
+        expect(text).toContain(phrase)
+      }
+      // the placeholder the command table landed with is gone
+      expect(text).not.toContain("Full description in the next revision")
+      // the out-of-scope paragraph points at the section instead of denying it
+      expect(text).not.toContain("is out of scope")
+    },
+  )
+
+  test.skipIf(root === undefined)("the root README no longer denies frames", async () => {
+    const text = await readRootDoc("README.md")
+    expect(text).not.toContain("do not operate inside any iframe")
+    expect(text).toContain("watchFrames")
+    expect(text).toContain("--frameId")
+  })
+
+  test.skipIf(root === undefined)(
+    "architecture.md describes the registry and lists the two modules",
+    async () => {
+      const text = await readRootDoc(join("docs", "architecture.md"))
+      for (const phrase of [
+        "## Child frames",
+        "src/frames.ts",
+        "src/handlers/frames.ts",
+        "generation",
+        "firefox-ctl-frame",
+        "webNavigation",
+      ]) {
+        expect(text).toContain(phrase)
+      }
+    },
+  )
+
+  test.skipIf(root === undefined)("roadmap.md records the child-frame plan", async () => {
+    const text = await readRootDoc(join("docs", "roadmap.md"))
+    expect(text).toContain("## Plan 6: Child frames (delivered)")
+    expect(text).toContain("all 33 commands")
+    expect(text).not.toContain("all 30 commands")
+  })
+
+  test.skipIf(root === undefined)(
+    "CLAUDE.md states the frame origin under the trust model",
+    async () => {
+      const text = await readRootDoc("CLAUDE.md")
+      expect(text).toContain("watchFrames")
+    },
+  )
+})

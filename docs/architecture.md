@@ -49,10 +49,10 @@ Every command answers over the same path: content script or background API, then
 ## Extension
 
 - MV2, extension ID `firefox-ctl@firefox-ctl.dev`, `persistent: true`, `strict_min_version` pinned to the Firefox release installed when the manifest was last generated (155.0 as of this writing), bumped deliberately, CSP `script-src 'self'; object-src 'self'`
-- Permissions: `nativeMessaging`, `tabs`, `tabGroups` (`tabGroups.query`/`.update`, used to name and find the `firefox-ctl` group), `<all_urls>`, `webRequest` (network capture), `storage` (persist managed window and attached tabs across background restarts)
+- Permissions: `nativeMessaging`, `tabs`, `tabGroups` (`tabGroups.query`/`.update`, used to name and find the `firefox-ctl` group), `<all_urls>`, `webRequest` (network capture), `webNavigation` (`onDOMContentLoaded`, the injection trigger for watched child frames), `storage` (persist managed window and attached tabs across background restarts)
 - `browser_specific_settings.gecko.data_collection_permissions.required` lists `browsingActivity`, `websiteContent`, `websiteActivity` and `authenticationInfo`, the categories of the matrix above. `none` is wrong for an add-on that hands page data to a native application, and `technicalAndInteraction` is not declared at all: it may only be optional, which would need a `permissions.request` from a user gesture, so the `browser` user agent field was dropped from the `version` result instead
 - `options_ui` opens `options.html` inside about:addons (`open_in_tab: false`); it is a static page with two checkboxes - the `evaluate` opt-in and header redaction - served by the third bundle, `dist/options.js`. It has no inline script, so the CSP stays as it is
-- Content script `run_at: document_idle`, `all_frames: false`
+- Content script `run_at: document_idle`, `all_frames: false`. The top document of a tab is the only one the manifest scripts; a child frame gets the same bundle only while its tab is watched, injected per frame by `src/frames.ts` (see "Child frames")
 - Content script is re-injected on every navigation. Page commands issued right after `navigate` must wait for readiness or retry, otherwise `tabs.sendMessage` fails with "Receiving end does not exist"
 - Restricted pages (`about:*` except `about:blank`, `moz-extension:`, JSON/PDF viewers, downloads) cannot host a content script; return structured errors (`RESTRICTED_PAGE`, `PAGE_LOAD_FAILED`, `CONTENT_SCRIPT_UNAVAILABLE`, `TAB_CLOSED`)
 - Screenshots: `browser.tabs.captureTab(tabId)` for every tab. It renders a background tab as it is, so no tab is ever activated and a capture never disturbs the window the user is looking at. A per-tab `StateLock` in `src/capture-locks.ts` serialises every capture of a tab, annotated or not, across the annotate/captureTab/removeAnnotations section, so a plain capture can never land while another request's badges are still on the page. Readiness detection (`waitForPageReady`), purpose presets, JPEG scaling via `resizeImage` in the content script and element annotation are kept. Neither readiness nor annotation needs a visible tab, but hidden tabs throttle requestAnimationFrame and idle callbacks, so readiness must honour its own timeout
@@ -105,6 +105,8 @@ waitFor    -> awaitTabComplete(tabs.onUpdated) -> content waitFor(selector|text)
 
 ## Extension frames
 
+The native-messaging frames on the wire, not the child frames of a tab; those are in "Child frames" below.
+
 - `port.onMessage(frame)`: `isHostCommand(frame)` (`type === "command"`) goes to the dispatcher, everything else resolves a pending extension-initiated request by `id`
 - Replies to host commands are `{id, success, result|error}` with a real boolean `success`, matching Go `ExtensionMessage`; the host tells replies from requests by that field
 - Extension-initiated requests are `{id, command}` with ids from `Environment.randomUUID` and a 150000 ms default timeout; the host answers `ping` and `version` and drops anything else
@@ -115,6 +117,17 @@ waitFor    -> awaitTabComplete(tabs.onUpdated) -> content waitFor(selector|text)
 - The `reply` closure captures the port a command arrived on, so an answer produced after a reconnect is logged and dropped instead of landing on the new port
 - Unknown or unregistered commands come back as `success: false` with `UNKNOWN_COMMAND: <name>`; a handler throwing a non-`ExtensionError` is stringified into the same `error` field. There is no `code` or `details` on the wire, the prefix carries the code
 - `runtime.onMessage` answers `getConnectionStatus` with `{connected, attempt, lastDisconnectReason, reconnectScheduled}` and returns `undefined` for anything else
+
+## Child frames
+
+- `src/frames.ts` holds `FrameRegistry`, the only place that knows which child frames can answer a command. It is per tab and opt-in: `watchFrames` opens a watch, `unwatchFrames` closes it, and a tab without a watch behaves exactly as before. `FrameRegistry.attach(browser)` is installed once at startup next to `network.attach()`, guarded by a `listening` flag like `src/capture-locks.ts`, and listens on `webNavigation.onDOMContentLoaded`, `runtime.onConnect` and `tabs.onRemoved`
+- Injection trigger: `onDOMContentLoaded` for a child frame (`frameId !== 0`) of a watched tab whose document url matches the watch glob records a pending injection and calls `tabs.executeScript(tabId, {frameId, file: "/dist/content.js", runAt: "document_idle"})`. `contentScripts.register` is not used: it registers by url for the whole browser, not for one tab. There is no backfill of frames already open when the watch opened, so the contract is watch-before-load and an unobserved frame answers `FRAME_NOT_OBSERVED`
+- Port registration: the injected side detects `window !== window.top` in `src/page.ts` and opens `runtime.connect({name: "firefox-ctl-frame"})`. Admission is by generation: every `watchFrames` takes a new generation number, and a port is admitted only when its `sender.tab.id`, `sender.frameId` and `sender.url` match a pending injection of the tab's *current* generation. Anything else - a port from a stale generation, a top frame, an unwatched tab, a url that no longer matches - is disconnected and ignored, which is what closes the race "injection pending, unwatch, watch again, the old document connects late"
+- Teardown: `unwatch` posts `{type: "deactivate"}` on every live port, disconnects them, drops pending records and entries and bumps the generation, so a frame script stops answering at once rather than after its next navigation; the frame side then refuses every action with `FRAME_NOT_OBSERVED` and drops the reply of an action already in flight, and `resetConsoleCapture()` takes its listeners off. A port's `onDisconnect` removes the entry only when the recorded port is that same port, so a late disconnect of a replaced port cannot evict the frame that took its place. `tabs.onRemoved` clears the whole watch, and `forget(tabId, frameId)` drops one stale entry when a send finds no receiver
+- Waits: `awaitFrame(tabId, criterion, deadline)` resolves `found`, `timeout`, `unwatched` or `closed` and serves both `listFrames --timeout` (wait-for-first) and `waitFor --frameId`. Every wait clears its own timer and listener when it settles, because the dispatcher deadline answers the command but does not cancel a running handler
+- `src/handlers/frames.ts` holds the three background commands. They are not page commands and send no action into a document; only the twelve document-local page commands take `frameId`, routed by `executeInFrame` in `src/handlers/dom.ts`, which refuses an unobserved frame before the send
+- Invariant: every `tabs.sendMessage` from the background names its frame explicitly, `{frameId: 0}` for the top document. With a second content script in the tab an unaddressed send broadcasts and resolves with whichever frame answers first
+- Naming: "child frame" throughout. "Frame" alone means a native-messaging wire frame (see "Extension frames") and, in `src/content/timing.ts`, an animation frame
 
 ## Reconnect
 
@@ -150,12 +163,15 @@ firefox-ctl/
 │   ├── src/capture-locks.ts # per-tab screenshot locks, pruned on tab close
 │   ├── src/memo.ts          # epoch-fenced memo for restore and the preamble
 │   ├── src/tab-errors.ts    # tab error mapping, loading-aware
-│   ├── src/glob.ts          # waitFor --url glob
+│   ├── src/glob.ts          # waitFor --url glob, watchFrames --match
+│   ├── src/frames.ts        # per-tab child-frame registry, generation admission
+│   ├── src/frame-port.ts    # the frame port name and its deactivate message
 │   ├── src/session.ts       # managed window, tab pool, persistence, sweep
 │   ├── src/attached.ts      # attached user tabs
 │   ├── src/network.ts       # webRequest tracker behind getNetworkRequests and readiness
 │   ├── src/readiness.ts     # waitForPageReady, the gate before a capture
 │   ├── src/handlers/        # window, tab, attachment, page, screenshot and devtools handlers
+│   ├── src/handlers/frames.ts # watchFrames, unwatchFrames, listFrames
 │   ├── src/devices.ts       # setViewport presets
 │   ├── src/protocol.ts      # wire contract, mirrors internal/protocol
 │   ├── src/commands.json    # command names, kept equal to internal/protocol's fixture

@@ -49,9 +49,11 @@ Style and tooling follow orx-cli. `cli/.golangci.yml` is its config with local p
 
 No auth token, no command or URL whitelists. The socket in a user-owned directory with mode 0600 is the only protection for every command but one: `evaluate` runs arbitrary expressions, so it stays off until the user ticks it in the add-on preferences (`options.html`), and no CLI flag can turn it on.
 
+A child frame watched with `watchFrames` runs the same content script in that frame's own origin, so its commands read and write that document, still without any whitelist.
+
 ## Roadmap
 
-Five ralphex plans in order, details in `docs/roadmap.md`: Go binary; extension skeleton (ends with the first end-to-end ping); sessions and windows; DOM actions; screenshots, DevTools and consent. Each plan is complete and tested before the next starts.
+Six ralphex plans in order, all delivered, details in `docs/roadmap.md`: Go binary; extension skeleton (ends with the first end-to-end ping); sessions and windows; DOM actions; screenshots, DevTools and consent; child frames. Each plan is complete and tested before the next starts.
 
 ## Commands
 

@@ -2,7 +2,7 @@
 
 Every command the CLI and the extension understand; the ones deliberately left out are listed under Dropped. Command names, parameter names and result shapes are stable so agent prompts keep working across versions. Invocation: `firefox-ctl <command> [--key value ...]`; nested or array values via `--json '{...}'`.
 
-All commands accept `--request-timeout <ms>` (5000-300000, default 150000), sent as `_timeout`; the name avoids a clash with waitFor's own `timeout` parameter. Output is JSON on stdout; errors go to stderr with a non-zero exit code and the extension's error message. The message starts with a stable prefix where one is defined: `TAB_CLOSED`, `TAB_UNAVAILABLE`, `NO_TABS`, `MODE_MISMATCH`, `RESTRICTED_PAGE`, `PAGE_LOAD_FAILED`, `CONTENT_SCRIPT_UNAVAILABLE`, `CONTENT_SCRIPT_ERROR`, `COMMAND_TIMEOUT`, `SCREENSHOT_TOO_LARGE`, `EVALUATE_DISABLED`, `AMBIGUOUS_TEXT`. A `details` object from the extension is not forwarded.
+All commands accept `--request-timeout <ms>` (5000-300000, default 150000), sent as `_timeout`; the name avoids a clash with waitFor's own `timeout` parameter. Output is JSON on stdout; errors go to stderr with a non-zero exit code and the extension's error message. The message starts with a stable prefix where one is defined: `TAB_CLOSED`, `TAB_UNAVAILABLE`, `NO_TABS`, `MODE_MISMATCH`, `RESTRICTED_PAGE`, `PAGE_LOAD_FAILED`, `CONTENT_SCRIPT_UNAVAILABLE`, `CONTENT_SCRIPT_ERROR`, `COMMAND_TIMEOUT`, `SCREENSHOT_TOO_LARGE`, `EVALUATE_DISABLED`, `AMBIGUOUS_TEXT`, `FRAME_NOT_OBSERVED`. A `details` object from the extension is not forwarded.
 
 The extension honours `_timeout` too: it gives every command a deadline 1000 ms shorter than the host's, covering the wait for the state lock, the session preamble, the handler and the persist, and answers `COMMAND_TIMEOUT: <command> did not finish within <ms> ms.` when that budget runs out, so a page that never replies is reported rather than hung. A timed-out command is answered, not cancelled: whatever it produces afterwards is logged and dropped. Only `createWindow`, `closeTab`, `closeWindow`, `attachTab` and `detachTab` serialise against each other; every other command runs concurrently, and `ping` and `version` skip the session entirely so they answer while another command is stuck. `screenshot` adds one more, narrower exception: every capture of the same tab serialises behind a per-tab lock around its own annotate/capture/remove section, so a plain capture can never land mid-annotation; that lock is freed once the command's own deadline passes, so a tab whose content script never answers cannot wedge later captures of it forever.
 
@@ -268,14 +268,100 @@ one of the four names above, or `{found: false, clicked: false, buttonText: null
 elapsed}` when no pass matched - which is also what a second call reports once the banner is
 gone.
 
-All four passes see only the tab's main document: the content script is injected with
-`all_frames: false`, and a cross-origin `<iframe>` is opaque to it anyway. Consent platforms
-that render the banner inside such a frame (Sourcepoint on theguardian.com, for example)
-therefore report `found: false` even while the banner is on screen. That is a limit of the
-content script, not a failure, and no other command reaches into that frame either
-(`evaluate` and `click` run in the main document too). Dismiss such banners by hand.
-Reaching into frames would need `all_frames: true` plus a per-frame dispatch in the
-background and is out of scope.
+One call sees one document. By default that is the tab's main document: the content script
+is injected with `all_frames: false`, and a cross-origin `<iframe>` is opaque to it anyway.
+Consent platforms that render the banner inside such a frame (Sourcepoint on
+theguardian.com, for example) therefore report `found: false` even while the banner is on
+screen, and so does every other command aimed at the tab. That is a limit of the content
+script, not a failure. To reach the frame, watch it and address it: `watchFrames`, then
+`handleConsent --frameId <id>` scans that document and nothing else. See Child frames below.
+
+## Child frames
+
+A page command runs in one document. Without `--frameId` that document is the tab's top one,
+which is the only one the manifest's content script is injected into (`all_frames: false`).
+Payment providers, consent platforms and embedded editors put their fields in cross-origin
+`<iframe>`s, which are invisible to the top document; `--frameId` addresses such a frame, and
+the three commands below decide which frames exist to be addressed.
+
+| Command | Params | Notes |
+|---|---|---|
+| watchFrames | [match], [tabId] | starts observing the child frames this tab loads from now on; `{tabId, match, watching: true}` with `match` `null` when none was given |
+| unwatchFrames | [tabId] | stops the watch and deactivates every frame script it injected; `{tabId, watching: false, released}`, `released` counting the frames that were live |
+| listFrames | [match], [timeout=0], [tabId] | `{tabId, watching, frames: [{frameId, url, parentFrameId}]}`, sorted by `frameId` |
+
+Observation is opt-in and per tab. `watchFrames --tabId N` adds a `webNavigation` watch on that
+tab: every later `DOMContentLoaded` of a child frame whose document URL matches `--match` gets
+the content script injected with `tabs.executeScript`, and the frame answers from then on. No
+other tab is touched, and nothing is registered globally.
+
+Watch before the frame loads. There is no backfill: a frame that was already open when
+`watchFrames` ran stays invisible until it loads again, and a command aimed at it fails with
+`FRAME_NOT_OBSERVED: frame 7 of tab 16 is not observed; call watchFrames before the frame loads
+or reopen it`. The working order is `watchFrames`, then the click or navigation that mounts the
+frames, then `listFrames`. `watchFrames` on a tab that is already watched fails with
+`tab 16 is already watched; call unwatchFrames first`, so a watch is never silently replaced;
+`unwatchFrames` first when the `--match` has to change. `unwatchFrames` is idempotent and
+answers `released: 0` for a tab that was not watched.
+
+`--match` is the glob of `waitFor --url`, anchored at both ends with `*` as the only wildcard,
+and it is tested against the frame document's own URL, not the `src` attribute of the
+`<iframe>` element. Without `--match` every child frame of the tab is observed. The same glob
+filters `listFrames --match`.
+
+`listFrames --timeout <ms>` waits for the first matching frame rather than for all of them: it
+returns as soon as one frame is admitted, so a provider that mounts four fields still needs a
+second call (or a `waitFor --frameId`) for the rest. It answers `frames: []` when the timeout
+passes with nothing admitted and when the watch is closed while it waits, and fails with
+`TAB_CLOSED` when the tab goes away. The wait is capped by what is left of `--request-timeout`.
+`timeout` defaults to `0`, which reports whatever is observed right now.
+
+`unwatchFrames` takes effect at once: the background tells every live frame script of the tab
+to stop, so an action already in flight answers `FRAME_NOT_OBSERVED: frame is deactivated; call
+watchFrames and reload it` instead of touching the document. Re-watching does not revive those
+frames - they are injected again on their next load, the same watch-before-load contract - so
+`listFrames` right after a second `watchFrames` is empty until the frames reload.
+
+### `--frameId`
+
+Twelve document-local commands accept `--frameId`: `getContent`, `click`, `type`, `pressKey`,
+`scroll`, `waitFor`, `getPageState`, `getAccessibilitySnapshot`, `getElementInfo`, `evaluate`,
+`getConsoleLogs` and `handleConsent`. The value comes from `listFrames`; `0` and a missing flag
+both mean the top document. The result carries `frameId` next to `tabId` whenever it is not
+`0`. A negative, fractional or non-numeric value fails with `frameId must be a non-negative
+integer.`, and `frameId` on any other command - `screenshot` included, which accepts `--json`
+and so could carry it - fails with `frameId is not supported by screenshot.` before anything is
+sent.
+
+What changes inside a frame:
+
+- `scroll --frameId` scrolls that frame's own document, and its `x`, `y`, `position` and
+  `elementPosition` are frame-local, not translated into top-document coordinates
+- `getConsoleLogs --frameId` reads that frame's buffer only, and capture is enabled per
+  document by its own first call
+- `handleConsent --frameId` runs its four passes in the addressed document and nothing else
+- `click --frameId --text` and `getElementInfo --frameId --text` search inside that one frame;
+  there is no search across frames, so the frame has to be picked first
+- `evaluate --frameId` runs in that frame's origin and isolated world, and still needs the
+  opt-in of the Evaluate gate
+- `waitFor --frameId` accepts `--selector` and `--text`; `--url` is refused with `waitFor --url
+  is not supported with --frameId`, because that wait watches the tab's URL, which no child
+  frame owns. The frame wait and the element wait share one deadline: `waitFor --frameId` waits
+  for the frame to be observed and then for the element, and answers `FRAME_NOT_OBSERVED` when
+  the budget runs out before the frame connects. A frame that navigates mid-wait takes its
+  script with it, is injected again and the wait continues
+- `screenshot` stays tab-wide: it captures the viewport, frames included, and takes no
+  `frameId`
+
+Frame ids are Firefox's, stable only while the frame document lives. A provider that recreates
+its iframes hands out new ids, so a long session re-runs `listFrames` rather than caching an
+id; a command aimed at a frame that is gone answers `FRAME_NOT_OBSERVED` and the stale entry
+disappears from the next `listFrames`.
+
+One limit worth naming: a frame document restored from the BFCache fires no
+`DOMContentLoaded`, so it is not re-injected and is not reported ready. The failure is clean -
+`FRAME_NOT_OBSERVED`, never a stale answer from a document that stopped listening - and the
+recovery is to make the frame load again.
 
 ## DevTools
 
@@ -330,17 +416,8 @@ of the last 2000 ms. A `--clear` therefore leaves every tab looking idle until n
 arrive, and a `screenshot` issued right after one can capture a page that is still loading;
 `--maxWait` cannot help there, because there is nothing left to wait for.
 
-All page commands additionally accept `tabId` and `windowId`.
-
-## Child frames
-
-| Command | Params | Notes |
-|---|---|---|
-| watchFrames | [match], [tabId] | `{tabId, match, watching: true}`; observes child frames loaded from now on |
-| unwatchFrames | [tabId] | `{tabId, watching: false, released}` |
-| listFrames | [match], [timeout=0], [tabId] | `{tabId, watching, frames: [{frameId, url, parentFrameId}]}` |
-
-Full description in the next revision of this section.
+All page commands additionally accept `tabId` and `windowId`, and the twelve document-local
+ones also accept `frameId`; see Child frames.
 
 ## Dropped
 
