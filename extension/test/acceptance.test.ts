@@ -766,7 +766,7 @@ const PLAN_DEVTOOLS_COMMANDS = [
 
 describe("the whole command table", () => {
   afterEach(() => {
-    resetConsoleCapture()
+    resetConsoleCapture(realPage())
   })
 
   test("every command of the last plan is in the CLI table and registered", () => {

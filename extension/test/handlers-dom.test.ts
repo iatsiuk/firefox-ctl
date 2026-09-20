@@ -7,7 +7,7 @@ import commandTable from "../src/commands.json"
 import { INTERNAL_ACTIONS } from "../src/content/actions"
 import type { HandlerDeps } from "../src/dispatch"
 import { createDispatcher } from "../src/dispatch"
-import { FrameRegistry } from "../src/frames"
+import { FRAME_PORT_NAME, FrameRegistry } from "../src/frames"
 import { executeInTab, PAGE_COMMANDS, pageHandlers } from "../src/handlers/dom"
 import { NetworkTracker } from "../src/network"
 import { pageActions } from "../src/page"
@@ -16,10 +16,20 @@ import { commandContext } from "../src/protocol"
 import { waitForPageReady } from "../src/readiness"
 import { Session } from "../src/session"
 import { writeEvaluateEnabled } from "../src/settings"
-import { FakeBrowser, FakeEnvironment } from "./fakes"
+import { FakeBrowser, FakeEnvironment, FakePort } from "./fakes"
 import errors from "./fixtures/errors.json"
 
 const RECEIVING_END = "Could not establish connection. Receiving end does not exist."
+
+const FRAME_ID = 7
+const FRAME_URL = "https://sdk-web-card.sandbox.y.uno/v1.88.5/pages/secured-fields.html#pan"
+
+// FRAME_NOT_OBSERVED is not in fixtures/errors.json yet: the fixture suite
+// requires every prefix there to be documented, and the section that documents
+// it is written with the rest of the frame docs
+const notObserved = (tabId: number, frameId: number): string =>
+  `FRAME_NOT_OBSERVED: frame ${frameId} of tab ${tabId} is not observed; ` +
+  "call watchFrames before the frame loads or reopen it"
 
 interface Sent {
   tabId: number
@@ -30,6 +40,7 @@ interface Sent {
 interface Harness {
   browser: FakeBrowser
   deps: HandlerDeps
+  frames: FrameRegistry
   sent: Sent[]
   tabId: number
   run(command: string, params?: JsonObject): Promise<JsonObject>
@@ -41,6 +52,8 @@ function harness(options: { url?: string; active?: boolean } = {}): Harness {
   const env = new FakeEnvironment({ now: 1000 })
   const session = new Session(browser, env)
   const attached = new AttachedTabs(browser, env)
+  const frames = new FrameRegistry(env)
+  frames.attach(browser)
   const deps: HandlerDeps = {
     browser,
     env,
@@ -48,7 +61,7 @@ function harness(options: { url?: string; active?: boolean } = {}): Harness {
     attached,
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
-    frames: new FrameRegistry(env),
+    frames,
     readiness: waitForPageReady,
     ctx: commandContext({}, env),
   }
@@ -76,6 +89,7 @@ function harness(options: { url?: string; active?: boolean } = {}): Harness {
   const h: Harness = {
     browser,
     deps,
+    frames,
     sent,
     tabId,
     run: async (command, params = {}) => {
@@ -92,6 +106,20 @@ function harness(options: { url?: string; active?: boolean } = {}): Harness {
     return Promise.resolve({ success: true, result: { ok: true } })
   }
   return h
+}
+
+/** Puts one child frame of the tab on the registry, the way an injection ends. */
+async function observe(h: Harness, frameId = FRAME_ID, url = FRAME_URL): Promise<FakePort> {
+  if (!h.frames.isWatched(h.tabId)) {
+    h.frames.watch(h.tabId)
+  }
+  await h.frames.frameLoaded({ tabId: h.tabId, frameId, parentFrameId: 0, url, timeStamp: 0 })
+  const port = new FakePort({
+    name: FRAME_PORT_NAME,
+    sender: { tab: { id: h.tabId }, frameId, url },
+  })
+  h.browser.emitConnect(port)
+  return port
 }
 
 describe("executeInTab", () => {
@@ -325,6 +353,167 @@ describe("scroll handler", () => {
       scrolledTo: true,
       noEffect: false,
     })
+  })
+})
+
+describe("frame routing", () => {
+  test("sends to the child frame it names and strips frameId from the params", async () => {
+    const h = harness()
+    await observe(h)
+
+    const result = await h.run("type", { selector: "#pan", text: "4111", frameId: FRAME_ID })
+
+    expect(h.sent).toEqual([
+      { tabId: h.tabId, action: "type", params: { selector: "#pan", text: "4111" } },
+    ])
+    expect(h.browser.sentMessages.map((sent) => sent.options)).toEqual([{ frameId: FRAME_ID }])
+    expect(result).toEqual({ tabId: h.tabId, frameId: FRAME_ID, ok: true })
+  })
+
+  test("frameId 0 is the top document and is not reported back", async () => {
+    const h = harness()
+
+    const result = await h.run("type", { selector: "#name", text: "Ada", frameId: 0 })
+
+    expect(h.browser.sentMessages.map((sent) => sent.options)).toEqual([{ frameId: 0 }])
+    expect(result).toEqual({ tabId: h.tabId, ok: true })
+    expect(h.sent[0]?.params).toEqual({ selector: "#name", text: "Ada" })
+  })
+
+  test.each([-1, 1.5, "7", true, null])("refuses the frameId %p", async (value) => {
+    const h = harness()
+
+    await expect(h.run("click", { selector: "#go", frameId: value })).rejects.toThrow(
+      "frameId must be a non-negative integer",
+    )
+    expect(h.sent).toHaveLength(0)
+  })
+
+  test("refuses a frame of a tab nobody watches and sends nothing", async () => {
+    const h = harness()
+
+    await expect(h.run("getPageState", { frameId: FRAME_ID })).rejects.toThrow(
+      notObserved(h.tabId, FRAME_ID),
+    )
+    expect(h.sent).toHaveLength(0)
+  })
+
+  test("refuses a frame the watch never admitted", async () => {
+    const h = harness()
+    await observe(h)
+
+    await expect(h.run("getContent", { frameId: 9 })).rejects.toThrow(notObserved(h.tabId, 9))
+    expect(h.sent).toHaveLength(0)
+  })
+
+  test("refuses every observed frame again once the watch is closed", async () => {
+    const h = harness()
+    await observe(h)
+    h.frames.unwatch(h.tabId)
+
+    await expect(h.run("click", { selector: "#go", frameId: FRAME_ID })).rejects.toThrow(
+      notObserved(h.tabId, FRAME_ID),
+    )
+    expect(h.sent).toHaveLength(0)
+  })
+
+  test("scroll routes to the frame, keeps its frame-local reply and still hints", async () => {
+    const h = harness({ active: false })
+    await observe(h)
+    h.browser.sendMessageHandler = () =>
+      Promise.resolve({
+        success: true,
+        result: { scrolledTo: true, x: 0, y: 240, elementPosition: { top: 12, left: 4 } },
+      })
+
+    const result = await h.run("scroll", { y: 240, frameId: FRAME_ID })
+
+    expect(h.browser.sentMessages[0]?.options).toEqual({ frameId: FRAME_ID })
+    expect(result).toEqual({
+      tabId: h.tabId,
+      frameId: FRAME_ID,
+      scrolledTo: true,
+      x: 0,
+      y: 240,
+      elementPosition: { top: 12, left: 4 },
+      backgroundTab: true,
+      hint: "Scroll has no effect on background tabs. Switch tab to active first.",
+    })
+  })
+
+  test.each(["getConsoleLogs", "handleConsent"])(
+    "%s reaches the addressed document only",
+    async (command) => {
+      const h = harness()
+      await observe(h)
+
+      const result = await h.run(command, { frameId: FRAME_ID })
+
+      expect(h.browser.sentMessages.map((sent) => sent.options)).toEqual([{ frameId: FRAME_ID }])
+      expect(h.sent).toEqual([{ tabId: h.tabId, action: command, params: {} }])
+      expect(result).toMatchObject({ tabId: h.tabId, frameId: FRAME_ID })
+    },
+  )
+
+  test("evaluate in a frame still honours the opt-in", async () => {
+    const h = harness()
+    await observe(h)
+
+    await expect(h.run("evaluate", { expression: "1 + 1", frameId: FRAME_ID })).rejects.toThrow(
+      /^EVALUATE_DISABLED: /,
+    )
+    expect(h.sent).toHaveLength(0)
+
+    await writeEvaluateEnabled(h.browser, true)
+    const result = await h.run("evaluate", { expression: "1 + 1", frameId: FRAME_ID })
+
+    expect(h.browser.sentMessages.map((sent) => sent.options)).toEqual([{ frameId: FRAME_ID }])
+    expect(result).toMatchObject({ tabId: h.tabId, frameId: FRAME_ID })
+  })
+
+  test("a receiver already gone maps to FRAME_NOT_OBSERVED and drops the entry", async () => {
+    const h = harness({ url: "about:config" })
+    await observe(h)
+    h.browser.sendMessageHandler = () => Promise.reject(new Error(RECEIVING_END))
+
+    // the top document is restricted, but its state says nothing about the frame
+    await expect(h.run("click", { selector: "#go", frameId: FRAME_ID })).rejects.toThrow(
+      notObserved(h.tabId, FRAME_ID),
+    )
+    expect(h.frames.list(h.tabId)).toEqual([])
+  })
+
+  test("keeps the top classification when frame 0 meets the same failure", async () => {
+    const h = harness({ url: "about:config" })
+    await observe(h)
+    h.browser.sendMessageHandler = () => Promise.reject(new Error(RECEIVING_END))
+
+    await expect(h.run("click", { selector: "#go" })).rejects.toThrow(/^RESTRICTED_PAGE: /)
+    expect(h.frames.list(h.tabId)).toHaveLength(1)
+  })
+})
+
+describe("frameId on a command that has no frame", () => {
+  const pageCommands = new Set<string>(PAGE_COMMANDS)
+  const others = commandTable.map((entry) => entry.name).filter((name) => !pageCommands.has(name))
+
+  test.each(others)("%s refuses frameId and messages no tab", async (command) => {
+    const browser = new FakeBrowser()
+    const dispatcher = createDispatcher(browser, new FakeEnvironment({}))
+
+    const response = await dispatcher.handle({
+      id: "frame-1",
+      type: "command",
+      command,
+      params: { frameId: FRAME_ID },
+    })
+
+    expect(response).toEqual({
+      id: "frame-1",
+      success: false,
+      error: `frameId is not supported by ${command}.`,
+    })
+    expect(browser.sentMessages).toHaveLength(0)
   })
 })
 

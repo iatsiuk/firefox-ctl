@@ -427,7 +427,7 @@ export function getPageState(params: JsonObject, page: Page): JsonValue {
       scrollHeight: page.document.documentElement.scrollHeight,
     },
     // only what console capture has seen; empty until the first getConsoleLogs
-    errors: capturedErrors(),
+    errors: capturedErrors(page),
     headings: headings.slice(0, maxHeadings),
     links: described(page, links, maxLinks),
     buttons: described(page, buttons, maxButtons),

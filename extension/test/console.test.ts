@@ -8,7 +8,7 @@ import {
 } from "../src/content/console"
 import { getPageState } from "../src/content/read"
 import type { JsonValue } from "../src/protocol"
-import { type FakePage, fakePage } from "./dom"
+import { childWindow, type FakePage, fakePage, isolatedWindow } from "./dom"
 import logsFixture from "./fixtures/results/getConsoleLogs.json"
 
 interface LogsResult {
@@ -24,10 +24,15 @@ function logs(params: Record<string, JsonValue> = {}, page: FakePage): LogsResul
 }
 
 /** A page whose capture is already running, as after the first getConsoleLogs. */
-function capturing(): FakePage {
-  const page = fakePage()
+function capturing(page: FakePage = fakePage()): FakePage {
   getConsoleLogs({}, page)
   return page
+}
+
+/** A content side of its own: one window, one document, one capture. */
+function sidePage(isTop = true): FakePage {
+  const { win, doc } = isTop ? isolatedWindow() : childWindow()
+  return fakePage(doc, win)
 }
 
 function messages(result: LogsResult): string[] {
@@ -35,7 +40,7 @@ function messages(result: LogsResult): string[] {
 }
 
 afterEach(() => {
-  resetConsoleCapture()
+  resetConsoleCapture(fakePage())
 })
 
 describe("console capture", () => {
@@ -225,9 +230,64 @@ describe("console capture", () => {
   })
 })
 
+describe("one capture per document", () => {
+  test("two content sides keep independent buffers", () => {
+    const top = capturing(sidePage(true))
+    const child = capturing(sidePage(false))
+
+    top.console.log("from the top")
+    child.console.log("from the frame")
+
+    expect(messages(logs({}, top))).toEqual(["from the top"])
+    expect(messages(logs({}, child))).toEqual(["from the frame"])
+  })
+
+  test("resetting one document leaves the other capturing", () => {
+    const top = capturing(sidePage(true))
+    const child = capturing(sidePage(false))
+    top.console.log("from the top")
+
+    resetConsoleCapture(child)
+    top.console.log("still here")
+
+    expect(messages(logs({}, top))).toEqual(["from the top", "still here"])
+    expect(logs({}, child).logs).toEqual([])
+  })
+
+  test("a second injection into one document shares the capture of the first", () => {
+    const { win, doc } = childWindow()
+    const first = capturing(fakePage(doc, win))
+    first.console.log("from the first injection")
+
+    const second = fakePage(doc, win)
+
+    // the second bundle finds the capture already running and wraps nothing
+    expect(messages(logs({}, second))).toEqual(["from the first injection"])
+    first.console.log("again")
+    expect(first.consoleCalls).toHaveLength(2)
+    expect(logs({}, first).logs).toHaveLength(2)
+  })
+
+  test("a reset takes the error and rejection listeners off the window", () => {
+    const page = capturing()
+
+    resetConsoleCapture(page)
+    page.window.dispatchEvent(
+      new ErrorEvent("error", { message: "boom", filename: "app.js", lineno: 4, colno: 9 }),
+    )
+    page.window.dispatchEvent(Object.assign(new Event("unhandledrejection"), { reason: "nope" }))
+    page.console.log("after the reset")
+
+    // the console is the page's own again: nothing was recorded before the
+    // next getConsoleLogs enabled a fresh capture
+    expect(logs({}, page).logs).toEqual([])
+    expect(page.consoleCalls).toEqual([{ level: "log", args: ["after the reset"] }])
+  })
+})
+
 describe("captured errors", () => {
   test("are empty before capture is enabled", () => {
-    expect(capturedErrors()).toEqual([])
+    expect(capturedErrors(fakePage())).toEqual([])
   })
 
   test("are the messages of the last ten error entries", () => {
@@ -237,7 +297,7 @@ describe("captured errors", () => {
       page.console.error(`boom ${i}`)
     }
 
-    expect(capturedErrors()).toEqual([
+    expect(capturedErrors(page)).toEqual([
       "boom 2",
       "boom 3",
       "boom 4",

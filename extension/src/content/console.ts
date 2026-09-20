@@ -144,17 +144,34 @@ class ConsoleCapture {
   }
 }
 
-// one buffer per content script: the document owns its logs
-const capture = new ConsoleCapture()
+// one buffer per document: the top document and a watched child frame of the
+// same tab each own their logs, and a second injection into one document finds
+// the capture its predecessor installed rather than wrapping the console twice
+const captures = new WeakMap<Window, ConsoleCapture>()
+
+function captureFor(page: Page): ConsoleCapture {
+  const existing = captures.get(page.window)
+  if (existing) {
+    return existing
+  }
+  const capture = new ConsoleCapture()
+  captures.set(page.window, capture)
+  return capture
+}
 
 export function getConsoleLogs(params: JsonObject, page: Page): JsonValue {
-  return capture.query(params, page)
+  return captureFor(page).query(params, page)
 }
 
-export function capturedErrors(limit: number = PAGE_STATE_ERRORS): string[] {
-  return capture.errors(limit)
+export function capturedErrors(page: Page, limit: number = PAGE_STATE_ERRORS): string[] {
+  return captures.get(page.window)?.errors(limit) ?? []
 }
 
-export function resetConsoleCapture(): void {
-  capture.reset()
+/**
+ * Restores this document's console and drops its entries. A frame the registry
+ * deactivates leaves the page as it found it; tests start from silence.
+ */
+export function resetConsoleCapture(page: Page): void {
+  captures.get(page.window)?.reset()
+  captures.delete(page.window)
 }

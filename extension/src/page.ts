@@ -5,6 +5,7 @@
 
 import type { Browser } from "./browser"
 import { pageActions } from "./content/actions"
+import { resetConsoleCapture } from "./content/console"
 import type { Page } from "./content/page"
 import type { ActionMap } from "./content/registry"
 import { handleAction } from "./content/registry"
@@ -27,7 +28,7 @@ export function startPage(browser: Browser, page: Page, actions: ActionMap = pag
     return
   }
   Object.defineProperty(page.window, STARTED, { configurable: true, value: true })
-  const active = page.window === page.window.top ? () => true : connectFrame(browser)
+  const active = page.window === page.window.top ? () => true : connectFrame(browser, page)
   browser.runtime.onMessage.addListener((message) => {
     if (!isActionMessage(message)) {
       return undefined
@@ -43,10 +44,13 @@ export function startPage(browser: Browser, page: Page, actions: ActionMap = pag
  * deactivation before disconnecting, and a disconnect on its own - the
  * background restarted, the registry refused the port - is just as final.
  */
-function connectFrame(browser: Browser): ActiveCheck {
+function connectFrame(browser: Browser, page: Page): ActiveCheck {
   let active = true
   const stop = (): void => {
     active = false
+    // console capture belongs to the watch: a frame nobody observes leaves the
+    // document's console and its error listeners as it found them
+    resetConsoleCapture(page)
   }
   const port = browser.runtime.connect({ name: FRAME_PORT_NAME })
   port.onMessage.addListener((message) => {

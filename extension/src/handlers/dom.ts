@@ -9,7 +9,7 @@ import type { ActionResponse } from "../messages"
 import type { JsonObject, JsonValue } from "../protocol"
 import { ExtensionError } from "../protocol"
 import { EVALUATE_ENABLED_DEFAULT, readEvaluateEnabled } from "../settings"
-import { describeTabError } from "../tab-errors"
+import { describeTabError, frameNotObserved } from "../tab-errors"
 import { resolveTargetTab } from "./tabs"
 import { waitForUrl, waitInPage } from "./wait"
 
@@ -37,8 +37,10 @@ const EVALUATE_DISABLED_HINT =
   "evaluate is disabled; enable it in the add-on preferences (about:addons > Terminal Control for Firefox > Preferences)"
 
 // targeting is the background page's business; the content script runs in the
-// tab that was picked and has no use for these
-const TARGET_PARAMS = ["tabId", "windowId"]
+// tab and frame that were picked and has no use for these
+const TARGET_PARAMS = ["tabId", "windowId", "frameId"]
+
+const INVALID_FRAME_ID = "frameId must be a non-negative integer."
 
 /**
  * Runs one action in one frame of a tab. A messaging failure becomes a coded
@@ -57,7 +59,7 @@ export async function executeInTab(
   try {
     reply = await browser.tabs.sendMessage(tabId, { action, params }, { frameId })
   } catch (error) {
-    throw await describeTabError(browser, tabId, error)
+    throw await describeTabError(browser, tabId, error, frameId)
   }
   const response = asActionResponse(reply)
   if (!response) {
@@ -91,6 +93,45 @@ function asActionResponse(reply: unknown): ActionResponse | null {
   return null
 }
 
+/**
+ * A child frame id straight from the CLI. Absent and `0` both mean the top
+ * document, which every tab has; anything else is a typo rather than a frame.
+ */
+export function parseFrameId(value: JsonValue | undefined): number {
+  if (value === undefined) {
+    return 0
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error(INVALID_FRAME_ID)
+  }
+  return value
+}
+
+/**
+ * Runs one action in the frame the command named. An unobserved frame is
+ * refused before anything is sent, and a frame whose script is already gone
+ * leaves the registry, so the next `listFrames` no longer offers it.
+ */
+export async function executeInFrame(
+  deps: HandlerDeps,
+  tabId: number,
+  action: string,
+  params: JsonObject,
+  frameId: number,
+): Promise<JsonValue> {
+  if (frameId !== 0 && !deps.frames.isObserved(tabId, frameId)) {
+    throw frameNotObserved(tabId, frameId)
+  }
+  try {
+    return await executeInTab(deps.browser, tabId, action, params, frameId)
+  } catch (error) {
+    if (frameId !== 0 && error instanceof ExtensionError && error.code === "FRAME_NOT_OBSERVED") {
+      deps.frames.forget(tabId, frameId)
+    }
+    throw error
+  }
+}
+
 function actionParams(params: JsonObject): JsonObject {
   const forwarded: JsonObject = {}
   for (const [name, value] of Object.entries(params)) {
@@ -101,12 +142,16 @@ function actionParams(params: JsonObject): JsonObject {
   return forwarded
 }
 
-/** `{tabId, ...result}`; a result that is not an object is kept whole. */
-function withTabId(tabId: number, result: JsonValue): JsonObject {
+/**
+ * `{tabId, ...result}`, plus the frame when the command ran in a child one; a
+ * result that is not an object is kept whole.
+ */
+function withTabId(tabId: number, result: JsonValue, frameId = 0): JsonObject {
+  const target: JsonObject = frameId === 0 ? { tabId } : { tabId, frameId }
   if (typeof result === "object" && result !== null && !Array.isArray(result)) {
-    return { tabId, ...result }
+    return { ...target, ...result }
   }
-  return { tabId, result }
+  return { ...target, result: result }
 }
 
 async function targetTab(deps: HandlerDeps, params: JsonObject): Promise<Tab> {
@@ -123,19 +168,24 @@ async function targetTabId(deps: HandlerDeps, params: JsonObject): Promise<numbe
 
 function pageCommand(action: PageCommand): Handler {
   return async (params, deps) => {
+    const frameId = parseFrameId(params.frameId)
     const tabId = await targetTabId(deps, params)
-    const result = await executeInTab(deps.browser, tabId, action, actionParams(params))
-    return withTabId(tabId, result)
+    const result = await executeInFrame(deps, tabId, action, actionParams(params), frameId)
+    return withTabId(tabId, result, frameId)
   }
 }
 
 /** Scrolling a background tab is a no-op in Firefox, so the reply says so. */
 const scroll: Handler = async (params, deps) => {
+  const frameId = parseFrameId(params.frameId)
   const tab = await targetTab(deps, params)
   const tabId = tab.id as number
+  // the content script scrolls its own document, so the reply of a child frame
+  // carries that frame's coordinates and needs no translation
   const result = withTabId(
     tabId,
-    await executeInTab(deps.browser, tabId, "scroll", actionParams(params)),
+    await executeInFrame(deps, tabId, "scroll", actionParams(params), frameId),
+    frameId,
   )
   if (!(tab.active ?? false)) {
     result.backgroundTab = true
@@ -151,15 +201,16 @@ const scroll: Handler = async (params, deps) => {
  * tab finish loading.
  */
 const waitFor: Handler = async (params, deps) => {
+  const frameId = parseFrameId(params.frameId)
   const tabId = await targetTabId(deps, params)
   const forwarded = actionParams(params)
   if (typeof params.text !== "string" && typeof params.url === "string") {
     return withTabId(tabId, await waitForUrl(deps, deps.ctx, tabId, forwarded))
   }
   const result = await waitInPage(deps, deps.ctx, tabId, forwarded, (id, action, sent) =>
-    executeInTab(deps.browser, id, action, sent),
+    executeInFrame(deps, id, action, sent, frameId),
   )
-  return withTabId(tabId, result)
+  return withTabId(tabId, result, frameId)
 }
 
 const forwardEvaluate = pageCommand("evaluate")

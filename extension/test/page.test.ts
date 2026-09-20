@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "bun:test"
 
+import { getConsoleLogs, resetConsoleCapture } from "../src/content/console"
 import { DEACTIVATE_MESSAGE, FRAME_PORT_NAME } from "../src/frame-port"
 import { pageActions, startPage } from "../src/page"
 import { childWindow, type FakePage, fakePage, isolatedWindow } from "./dom"
@@ -157,6 +158,35 @@ describe("startPage in a child frame", () => {
     await page.advance(1000)
     expect(doc.querySelector<HTMLInputElement>("#late")?.value).toBe("")
   })
+})
+
+describe("console capture in a child frame", () => {
+  for (const [name, end] of [
+    ["the background deactivates it", (port: FakePort) => port.emitMessage(DEACTIVATE_MESSAGE)],
+    ["its port disconnects", (port: FakePort) => port.disconnect()],
+  ] as const) {
+    test(`gives the document its console back once ${name}`, async () => {
+      const { browser, page } = side(false)
+      startPage(browser, page)
+      getConsoleLogs({}, page)
+      page.console.log("while observed")
+      await expect(
+        browser.emitRuntimeMessage({ action: "getConsoleLogs", params: {} }),
+      ).resolves.toMatchObject({ success: true })
+
+      end(framePort(browser))
+      page.console.log("after the deactivation")
+
+      // the wrapper is gone: the log reached the page console and nothing was
+      // recorded, so a capture enabled later starts from an empty buffer
+      expect(page.consoleCalls.map((call) => call.args)).toEqual([
+        ["while observed"],
+        ["after the deactivation"],
+      ])
+      expect(getConsoleLogs({}, page)).toMatchObject({ logs: [], total: 0 })
+      resetConsoleCapture(page)
+    })
+  }
 })
 
 describe("pageActions", () => {

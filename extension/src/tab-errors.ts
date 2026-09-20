@@ -9,14 +9,26 @@ const MISSING_RECEIVER = "Receiving end does not exist"
 const RESTRICTED_SCHEMES = ["about:", "chrome:", "moz-extension:"]
 const NON_HTML_EXTENSIONS = /\.(json|xml|pdf|csv|txt|bin|zip|gz|tar|woff|woff2|ttf|otf|eot)(\?|$)/i
 
+/** What a command gets when it names a child frame the registry cannot reach. */
+export function frameNotObserved(tabId: number, frameId: number): ExtensionError {
+  return new ExtensionError(
+    "FRAME_NOT_OBSERVED",
+    `frame ${frameId} of tab ${tabId} is not observed; ` +
+      "call watchFrames before the frame loads or reopen it",
+  )
+}
+
 /**
  * Replaces Firefox's cryptic "Receiving end does not exist" with a coded error.
- * Any other failure is returned untouched.
+ * Any other failure is returned untouched. A send into a child frame is only
+ * ever about that frame: whatever the top document is doing, its script is not
+ * the one that failed to answer.
  */
 export async function describeTabError(
   browser: Browser,
   tabId: number,
   error: unknown,
+  frameId = 0,
 ): Promise<Error> {
   if (!errorText(error).includes(MISSING_RECEIVER)) {
     return error instanceof Error ? error : new Error(errorText(error))
@@ -29,6 +41,9 @@ export async function describeTabError(
       "TAB_CLOSED",
       `Tab ${tabId} no longer exists. It may have been closed by the user.`,
     )
+  }
+  if (frameId !== 0) {
+    return frameNotObserved(tabId, frameId)
   }
   const context = `\n  URL: ${tab.url ?? "(none)"}\n  Title: ${tab.title ?? "(none)"}`
   const coded = classifyTab(tab, context, tabId)

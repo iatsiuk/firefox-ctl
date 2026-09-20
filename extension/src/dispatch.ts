@@ -74,6 +74,14 @@ export function isProbeCommand(name: string): boolean {
   return probes.has(name)
 }
 
+// only the document-local page commands run inside a child frame; anywhere else
+// a frame target would be quietly ignored, which is worse than a refusal
+const framePageCommands: ReadonlySet<string> = new Set<string>(PAGE_COMMANDS)
+
+function unsupportedFrameId(command: HostCommand): boolean {
+  return command.params.frameId !== undefined && !framePageCommands.has(command.command)
+}
+
 /**
  * Commands that mutate `Session` or `AttachedTabs` across await points. They
  * take the state lock; everything else - reads, navigation, geometry and the
@@ -153,6 +161,13 @@ export class Dispatcher {
         id: command.id,
         success: false,
         error: new ExtensionError("UNKNOWN_COMMAND", command.command).message,
+      }
+    }
+    if (unsupportedFrameId(command)) {
+      return {
+        id: command.id,
+        success: false,
+        error: `frameId is not supported by ${command.command}.`,
       }
     }
     const active: CommandRun = { expired: false }
