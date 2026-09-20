@@ -187,6 +187,18 @@ describe("page command handlers", () => {
     expect(result).toMatchObject({ tabId: h.tabId, ok: true })
   })
 
+  test.each([...PAGE_COMMANDS])("%s names the top frame explicitly", async (command) => {
+    const h = harness()
+    await writeEvaluateEnabled(h.browser, true)
+
+    await h.run(command)
+
+    expect(h.browser.sentMessages.map((sent) => sent.options)).toEqual(
+      h.browser.sentMessages.map(() => ({ frameId: 0 })),
+    )
+    expect(h.browser.sentMessages).not.toHaveLength(0)
+  })
+
   test("merges the tab id into the content result", async () => {
     const h = harness()
     h.browser.sendMessageHandler = () =>

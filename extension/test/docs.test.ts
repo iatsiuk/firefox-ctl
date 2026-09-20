@@ -518,9 +518,9 @@ describe("source archive and reviewer material", () => {
   })
 
   test.skipIf(root === undefined)(
-    "CLAUDE.md documents the listed-channel submission steps",
+    "ship-extension.md documents the listed-channel submission steps",
     async () => {
-      const text = await readRootDoc("CLAUDE.md")
+      const text = await readRootDoc(join("docs", "ship-extension.md"))
       for (const phrase of [
         "make ext-source",
         "make ext-reproduce",
@@ -531,6 +531,13 @@ describe("source archive and reviewer material", () => {
       }
     },
   )
+
+  test.skipIf(root === undefined)("CLAUDE.md points at the shipping procedures", async () => {
+    const text = await readRootDoc("CLAUDE.md")
+    for (const phrase of ["docs/ship-extension.md", "docs/release-binary.md"]) {
+      expect(text).toContain(phrase)
+    }
+  })
 })
 
 describe("visible text documentation", () => {

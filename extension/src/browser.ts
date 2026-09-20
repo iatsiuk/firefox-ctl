@@ -18,6 +18,10 @@ export interface Port {
   readonly onDisconnect: Event<(port: Port) => void>
   // Firefox sets error on the port it passes to onDisconnect listeners
   readonly error?: PortError
+  // the name the connecting side passed to runtime.connect
+  readonly name?: string
+  // set by Firefox on the background side of a runtime port
+  readonly sender?: MessageSender
 }
 
 export interface Manifest {
@@ -28,6 +32,8 @@ export interface MessageSender {
   tab?: Tab
   id?: string
   url?: string
+  // the frame the message came from; 0 is the top document
+  frameId?: number
 }
 
 export type MessageListener = (
@@ -35,10 +41,16 @@ export type MessageListener = (
   sender: MessageSender,
 ) => unknown | Promise<unknown>
 
+export interface ConnectInfo {
+  name: string
+}
+
 export interface Runtime {
   connectNative(name: string): Port
+  connect(info: ConnectInfo): Port
   getManifest(): Manifest
   readonly onMessage: Event<MessageListener>
+  readonly onConnect: Event<(port: Port) => void>
 }
 
 export interface Tab {
@@ -101,13 +113,25 @@ export interface TabActiveInfo {
   previousTabId?: number
 }
 
+export interface SendMessageOptions {
+  // which frame of the tab receives the message; 0 is the top document
+  frameId: number
+}
+
+export interface ExecuteScriptDetails {
+  frameId?: number
+  file: string
+  runAt?: "document_start" | "document_end" | "document_idle"
+}
+
 export interface Tabs {
   get(tabId: number): Promise<Tab>
   query(query: TabQuery): Promise<Tab[]>
   create(properties: TabCreateProperties): Promise<Tab>
   remove(tabId: number): Promise<void>
   update(tabId: number, properties: TabUpdateProperties): Promise<Tab>
-  sendMessage(tabId: number, message: unknown): Promise<unknown>
+  sendMessage(tabId: number, message: unknown, options?: SendMessageOptions): Promise<unknown>
+  executeScript(tabId: number, details: ExecuteScriptDetails): Promise<unknown[]>
   // renders a tab without activating it and returns a data URL
   captureTab(tabId: number, options?: CaptureOptions): Promise<string>
   // tab groups landed in Firefox 138, so the method may be missing
@@ -222,6 +246,19 @@ export interface WebRequest {
   readonly onErrorOccurred: WebRequestEvent<(details: ErrorDetails) => void>
 }
 
+// a child frame is a frame of a tab, not a native-messaging wire frame
+export interface FrameNavigationDetails {
+  tabId: number
+  frameId: number
+  parentFrameId: number
+  url: string
+  timeStamp: number
+}
+
+export interface WebNavigation {
+  readonly onDOMContentLoaded: Event<(details: FrameNavigationDetails) => void>
+}
+
 export interface Extension {
   isAllowedIncognitoAccess(): Promise<boolean>
 }
@@ -243,6 +280,7 @@ export interface Browser {
   readonly storage: Storage
   readonly extension: Extension
   readonly webRequest: WebRequest
+  readonly webNavigation: WebNavigation
   // absent before Firefox 138
   readonly tabGroups?: TabGroups
 }

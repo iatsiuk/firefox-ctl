@@ -125,6 +125,14 @@ describe("waitForPageReady", () => {
     expect(h.sent).toEqual([{ action: "checkPageReadiness", params: {} }])
   })
 
+  test("sends the readiness check to the top frame explicitly", async () => {
+    const h = harness()
+    const pending = waitForPageReady(h.deps, h.ctx, TAB_ID)
+    await drive(h.env, 0)
+    await pending
+    expect(h.browser.sentMessages.map((sent) => sent.options)).toEqual([{ frameId: 0 }])
+  })
+
   test("waits for the critical requests, then for the visual ones", async () => {
     const h = harness()
     h.browser.emitRequestStarted({

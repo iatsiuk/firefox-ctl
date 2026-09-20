@@ -363,7 +363,13 @@ function contentTab(browser: FakeBrowser): void {
   }
   const contentBrowser = new FakeBrowser()
   startPage(contentBrowser, realPage())
-  browser.sendMessageHandler = (_tabId, message) => contentBrowser.emitRuntimeMessage(message)
+  // every background send names its frame, so a stray broadcast fails the run
+  browser.sendMessageHandler = (_tabId, message, options) => {
+    if (options === undefined) {
+      return Promise.reject(new Error("tabs.sendMessage was called without a frame target"))
+    }
+    return contentBrowser.emitRuntimeMessage(message)
+  }
 }
 
 /** The row of `docs/commands.md` describing one command. */

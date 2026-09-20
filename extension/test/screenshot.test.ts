@@ -290,6 +290,22 @@ describe("screenshot", () => {
     expect(result.labels).toEqual({ "1": { selector: "#save", text: "Save", role: "button" } })
   })
 
+  test("names the top frame explicitly on every internal action", async () => {
+    const h = harness()
+
+    await h.run({ annotate: true, scale: 0.5 })
+
+    expect(h.actions()).toEqual([
+      "checkPageReadiness",
+      "annotateElements",
+      "removeAnnotations",
+      "resizeImage",
+    ])
+    expect(h.browser.sentMessages.map((sent) => sent.options)).toEqual(
+      h.actions().map(() => ({ frameId: 0 })),
+    )
+  })
+
   test("clears the badges when the capture itself fails", async () => {
     const h = harness()
     h.browser.captureHandler = () => Promise.reject(new Error("Failed to capture tab"))

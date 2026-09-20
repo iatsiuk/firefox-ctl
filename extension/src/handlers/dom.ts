@@ -41,18 +41,21 @@ const EVALUATE_DISABLED_HINT =
 const TARGET_PARAMS = ["tabId", "windowId"]
 
 /**
- * Runs one action in a tab. A messaging failure becomes a coded error, a
- * refused action keeps the content script's own message.
+ * Runs one action in one frame of a tab. A messaging failure becomes a coded
+ * error, a refused action keeps the content script's own message. The frame is
+ * always named: with a second content script in the tab an unaddressed send
+ * would go to whichever frame answers first.
  */
 export async function executeInTab(
   browser: Browser,
   tabId: number,
   action: string,
   params: JsonObject,
+  frameId = 0,
 ): Promise<JsonValue> {
   let reply: unknown
   try {
-    reply = await browser.tabs.sendMessage(tabId, { action, params })
+    reply = await browser.tabs.sendMessage(tabId, { action, params }, { frameId })
   } catch (error) {
     throw await describeTabError(browser, tabId, error)
   }

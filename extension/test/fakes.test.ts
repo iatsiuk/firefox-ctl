@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 
-import type { Browser } from "../src/browser"
+import type {
+  Browser,
+  FrameNavigationDetails,
+  MessageSender,
+  SendMessageOptions,
+} from "../src/browser"
 import type { Environment } from "../src/env"
 import { FakeBrowser, FakeEnvironment, FakePort } from "./fakes"
 
@@ -120,6 +125,47 @@ describe("FakeBrowser.runtime", () => {
     const browser = new FakeBrowser()
     expect(await browser.emitRuntimeMessage({ action: "ping" })).toBeUndefined()
   })
+
+  test("emitRuntimeMessage hands the sender to the listener", async () => {
+    const browser = new FakeBrowser()
+    const seen: MessageSender[] = []
+    browser.runtime.onMessage.addListener((_message, sender) => {
+      seen.push(sender)
+      return undefined
+    })
+    await browser.emitRuntimeMessage({ action: "ping" }, { tab: { id: 7 }, frameId: 3 })
+    expect(seen).toEqual([{ tab: { id: 7 }, frameId: 3 }])
+  })
+
+  test("connect records the port under its name and returns it", () => {
+    const browser = new FakeBrowser()
+    const port = browser.runtime.connect({ name: "firefox-ctl-frame" }) as FakePort
+    expect(port.name).toBe("firefox-ctl-frame")
+    expect(browser.connectedPorts).toEqual([port])
+    expect(browser.ports).not.toContain(port)
+  })
+
+  test("emitConnect delivers a port with its sender to onConnect listeners", () => {
+    const browser = new FakeBrowser()
+    const seen: FakePort[] = []
+    browser.runtime.onConnect.addListener((port) => seen.push(port as FakePort))
+    const port = new FakePort({
+      name: "firefox-ctl-frame",
+      sender: { tab: { id: 16 }, frameId: 7, url: "https://sdk.example/fields.html" },
+    })
+    browser.emitConnect(port)
+    expect(seen).toEqual([port])
+    expect(seen[0]?.name).toBe("firefox-ctl-frame")
+    expect(seen[0]?.sender).toEqual({
+      tab: { id: 16 },
+      frameId: 7,
+      url: "https://sdk.example/fields.html",
+    })
+  })
+
+  test("a port without an explicit name carries an empty one", () => {
+    expect(new FakePort().name).toBe("")
+  })
 })
 
 describe("FakeBrowser.tabs", () => {
@@ -168,6 +214,51 @@ describe("FakeBrowser.tabs", () => {
     })
   })
 
+  test("sendMessage records its options and passes them to the handler", async () => {
+    const browser = new FakeBrowser()
+    browser.addTab({ id: 7, windowId: 1 })
+    const seen: (SendMessageOptions | undefined)[] = []
+    browser.sendMessageHandler = (tabId, message, options) => {
+      seen.push(options)
+      return Promise.resolve({ tabId, message, options })
+    }
+
+    await browser.tabs.sendMessage(7, { action: "ping" }, { frameId: 3 })
+    await browser.tabs.sendMessage(7, { action: "ping" })
+
+    expect(seen).toEqual([{ frameId: 3 }, undefined])
+    expect(browser.sentMessages).toEqual([
+      { tabId: 7, message: { action: "ping" }, options: { frameId: 3 } },
+      { tabId: 7, message: { action: "ping" }, options: undefined },
+    ])
+  })
+
+  test("executeScript records the injection and resolves", async () => {
+    const browser = new FakeBrowser()
+    browser.addTab({ id: 7, windowId: 1 })
+
+    const result = await browser.tabs.executeScript(7, {
+      frameId: 3,
+      file: "/dist/content.js",
+      runAt: "document_idle",
+    })
+
+    expect(result).toEqual([])
+    expect(browser.executeScriptCalls).toEqual([
+      { tabId: 7, details: { frameId: 3, file: "/dist/content.js", runAt: "document_idle" } },
+    ])
+  })
+
+  test("executeScript uses the configured handler", async () => {
+    const browser = new FakeBrowser()
+    browser.executeScriptHandler = () => Promise.reject(new Error("Missing host permission"))
+
+    expect(browser.tabs.executeScript(7, { frameId: 3, file: "/dist/content.js" })).rejects.toThrow(
+      "Missing host permission",
+    )
+    expect(browser.executeScriptCalls).toHaveLength(1)
+  })
+
   test("emitTabUpdated notifies onUpdated listeners", () => {
     const browser = new FakeBrowser()
     browser.addTab({ id: 7, windowId: 1 })
@@ -177,6 +268,41 @@ describe("FakeBrowser.tabs", () => {
     )
     browser.emitTabUpdated(7, { status: "complete" })
     expect(seen).toEqual([{ tabId: 7, status: "complete" }])
+  })
+})
+
+describe("FakeBrowser.webNavigation", () => {
+  test("emitFrameLoaded notifies onDOMContentLoaded listeners", () => {
+    const browser = new FakeBrowser()
+    const seen: FrameNavigationDetails[] = []
+    browser.webNavigation.onDOMContentLoaded.addListener((details) => seen.push(details))
+
+    browser.emitFrameLoaded({
+      tabId: 16,
+      frameId: 7,
+      parentFrameId: 0,
+      url: "https://sdk.example/fields.html",
+    })
+
+    expect(seen).toEqual([
+      {
+        tabId: 16,
+        frameId: 7,
+        parentFrameId: 0,
+        url: "https://sdk.example/fields.html",
+        timeStamp: 0,
+      },
+    ])
+  })
+
+  test("emitFrameLoaded defaults the parent frame to the top document", () => {
+    const browser = new FakeBrowser()
+    const seen: FrameNavigationDetails[] = []
+    browser.webNavigation.onDOMContentLoaded.addListener((details) => seen.push(details))
+
+    browser.emitFrameLoaded({ tabId: 16, frameId: 7, url: "https://sdk.example/fields.html" })
+
+    expect(seen[0]?.parentFrameId).toBe(0)
   })
 })
 

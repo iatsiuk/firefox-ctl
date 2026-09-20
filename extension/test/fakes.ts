@@ -2,9 +2,12 @@ import type {
   Browser,
   CaptureOptions,
   CompletedDetails,
+  ConnectInfo,
   ErrorDetails,
   Event,
+  ExecuteScriptDetails,
   Extension,
+  FrameNavigationDetails,
   Manifest,
   MessageListener,
   MessageSender,
@@ -13,6 +16,7 @@ import type {
   RequestDetails,
   RequestFilter,
   Runtime,
+  SendMessageOptions,
   Storage,
   StorageArea,
   Tab,
@@ -28,6 +32,7 @@ import type {
   TabRemoveInfo,
   Tabs,
   TabUpdateProperties,
+  WebNavigation,
   WebRequest,
   WebRequestEvent,
   Window,
@@ -91,12 +96,24 @@ export class FakeWebRequestEvent<F> implements WebRequestEvent<F> {
   }
 }
 
+export interface FakePortOptions {
+  name?: string
+  sender?: MessageSender
+}
+
 export class FakePort implements Port {
   readonly posted: unknown[] = []
   readonly onMessage = new FakeEvent<(message: unknown) => void>()
   readonly onDisconnect = new FakeEvent<(port: Port) => void>()
+  readonly name: string
+  readonly sender?: MessageSender
   error?: PortError
   disconnected = false
+
+  constructor(options: FakePortOptions = {}) {
+    this.name = options.name ?? ""
+    this.sender = options.sender
+  }
 
   postMessage(message: unknown): void {
     if (this.disconnected) {
@@ -146,11 +163,21 @@ export class FakeBrowser implements Browser {
   readonly storage: Storage
   readonly extension: Extension
   readonly webRequest: WebRequest
+  readonly webNavigation: WebNavigation
   readonly tabGroups?: TabGroups
 
   readonly ports: FakePort[] = []
+  readonly connectedPorts: FakePort[] = []
   readonly connectedHosts: string[] = []
+  readonly sentMessages: {
+    tabId: number
+    message: unknown
+    options?: SendMessageOptions
+  }[] = []
+  readonly executeScriptCalls: { tabId: number; details: ExecuteScriptDetails }[] = []
   readonly runtimeMessages = new FakeEvent<MessageListener>()
+  readonly runtimeConnections = new FakeEvent<(port: Port) => void>()
+  readonly framesLoaded = new FakeEvent<(details: FrameNavigationDetails) => void>()
   readonly tabsRemoved = new FakeEvent<(tabId: number, removeInfo: TabRemoveInfo) => void>()
   readonly tabsUpdated = new FakeEvent<
     (tabId: number, changeInfo: TabChangeInfo, tab: Tab) => void
@@ -167,7 +194,12 @@ export class FakeBrowser implements Browser {
   // set to make windows.create({incognito: true}) reject the way Firefox does
   // without the "Run in Private Windows" permission
   failPrivate?: string
-  sendMessageHandler?: (tabId: number, message: unknown) => Promise<unknown>
+  sendMessageHandler?: (
+    tabId: number,
+    message: unknown,
+    options?: SendMessageOptions,
+  ) => Promise<unknown>
+  executeScriptHandler?: (tabId: number, details: ExecuteScriptDetails) => Promise<unknown[]>
   captureHandler?: (tabId: number, options?: CaptureOptions) => Promise<string>
   currentWindowId = 1
   allowedIncognitoAccess: boolean
@@ -194,8 +226,10 @@ export class FakeBrowser implements Browser {
 
     this.runtime = {
       connectNative: (name) => this.connectNative(name),
+      connect: (info) => this.connect(info),
       getManifest: () => this.manifest,
       onMessage: this.runtimeMessages,
+      onConnect: this.runtimeConnections,
     }
     this.tabs = {
       get: (tabId) => this.getTab(tabId),
@@ -203,7 +237,9 @@ export class FakeBrowser implements Browser {
       create: (properties) => this.createTab(properties),
       remove: (tabId) => this.removeTabApi(tabId),
       update: (tabId, properties) => this.updateTab(tabId, properties),
-      sendMessage: (tabId, message) => this.sendTabMessage(tabId, message),
+      sendMessage: (tabId, message, sendOptions) =>
+        this.sendTabMessage(tabId, message, sendOptions),
+      executeScript: (tabId, details) => this.executeScript(tabId, details),
       captureTab: (tabId, captureOptions) => this.captureTab(tabId, captureOptions),
       group:
         options.tabGroups === false ? undefined : (groupOptions) => this.groupTabs(groupOptions),
@@ -226,6 +262,7 @@ export class FakeBrowser implements Browser {
       onCompleted: this.requestsCompleted,
       onErrorOccurred: this.requestsFailed,
     }
+    this.webNavigation = { onDOMContentLoaded: this.framesLoaded }
     this.extension = {
       isAllowedIncognitoAccess: () => Promise.resolve(this.allowedIncognitoAccess),
     }
@@ -330,6 +367,28 @@ export class FakeBrowser implements Browser {
     return undefined
   }
 
+  emitConnect(port: FakePort): void {
+    for (const listener of this.runtimeConnections.snapshot()) {
+      listener(port)
+    }
+  }
+
+  emitFrameLoaded(
+    details: Omit<FrameNavigationDetails, "parentFrameId" | "timeStamp"> &
+      Partial<Pick<FrameNavigationDetails, "parentFrameId" | "timeStamp">>,
+  ): void {
+    const loaded: FrameNavigationDetails = { parentFrameId: 0, timeStamp: 0, ...details }
+    for (const listener of this.framesLoaded.snapshot()) {
+      listener(loaded)
+    }
+  }
+
+  private connect(info: ConnectInfo): Port {
+    const port = new FakePort({ name: info.name })
+    this.connectedPorts.push(port)
+    return port
+  }
+
   private connectNative(name: string): Port {
     this.connectedHosts.push(name)
     if (this.failConnect !== undefined) {
@@ -412,13 +471,26 @@ export class FakeBrowser implements Browser {
     return Promise.resolve(tab)
   }
 
-  private sendTabMessage(tabId: number, message: unknown): Promise<unknown> {
+  private sendTabMessage(
+    tabId: number,
+    message: unknown,
+    options?: SendMessageOptions,
+  ): Promise<unknown> {
+    this.sentMessages.push({ tabId, message, options })
     if (this.sendMessageHandler) {
-      return this.sendMessageHandler(tabId, message)
+      return this.sendMessageHandler(tabId, message, options)
     }
     return Promise.reject(
       new Error("Could not establish connection. Receiving end does not exist."),
     )
+  }
+
+  private executeScript(tabId: number, details: ExecuteScriptDetails): Promise<unknown[]> {
+    this.executeScriptCalls.push({ tabId, details })
+    if (this.executeScriptHandler) {
+      return this.executeScriptHandler(tabId, details)
+    }
+    return Promise.resolve([])
   }
 
   private captureTab(tabId: number, options?: CaptureOptions): Promise<string> {
