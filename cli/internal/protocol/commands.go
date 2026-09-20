@@ -62,27 +62,27 @@ var Commands = []Spec{
 		{Name: "width", Kind: KindInt, Usage: "viewport width in pixels"},
 		{Name: "height", Kind: KindInt, Usage: "viewport height in pixels"},
 	}},
-	{Name: "getContent", Flags: page(
+	{Name: "getContent", Flags: framePage(
 		Flag{Name: "selector", Kind: KindString, Usage: "css selector to extract"},
 		Flag{Name: "includeHtml", Kind: KindBool, Usage: "include html alongside text"},
 		Flag{Name: "maxLength", Kind: KindInt, Default: 50000, Usage: "maximum characters returned"},
 		Flag{Name: "tail", Kind: KindInt, Usage: "return only the last N characters, instead of --maxLength"},
 	)},
-	{Name: "click", Flags: page(
+	{Name: "click", Flags: framePage(
 		Flag{Name: "selector", Kind: KindString, Usage: "css selector to click"},
 		Flag{Name: "text", Kind: KindString, Usage: "exact visible text of the element, alternative to --selector"},
 		Flag{Name: "scope", Kind: KindString, Usage: "css selector of the element to search inside, only with --text"},
 		Flag{Name: "autoWait", Kind: KindBool, Default: true, Usage: "wait for the element to appear"},
 		Flag{Name: "waitTimeout", Kind: KindInt, Usage: "auto-wait timeout in ms"},
 	)},
-	{Name: "type", Flags: page(
+	{Name: "type", Flags: framePage(
 		Flag{Name: "selector", Kind: KindString, Usage: "css selector of the input"},
 		Flag{Name: "text", Kind: KindString, Usage: "text to type"},
 		Flag{Name: "clear", Kind: KindBool, Default: true, Usage: "clear the field first"},
 		Flag{Name: "autoWait", Kind: KindBool, Usage: "wait for the element to appear"},
 		Flag{Name: "waitTimeout", Kind: KindInt, Usage: "auto-wait timeout in ms"},
 	)},
-	{Name: "pressKey", Flags: page(
+	{Name: "pressKey", Flags: framePage(
 		Flag{Name: "key", Kind: KindString, Usage: "key name, for example Enter"},
 		Flag{Name: "selector", Kind: KindString, Usage: "css selector to focus first"},
 		Flag{Name: "ctrlKey", Kind: KindBool, Usage: "hold control"},
@@ -90,13 +90,13 @@ var Commands = []Spec{
 		Flag{Name: "altKey", Kind: KindBool, Usage: "hold alt"},
 		Flag{Name: "metaKey", Kind: KindBool, Usage: "hold command"},
 	)},
-	{Name: "scroll", Flags: page(
+	{Name: "scroll", Flags: framePage(
 		Flag{Name: "selector", Kind: KindString, Usage: "css selector to scroll into view"},
 		Flag{Name: "x", Kind: KindInt, Usage: "horizontal scroll position"},
 		Flag{Name: "y", Kind: KindInt, Usage: "vertical scroll position"},
 		Flag{Name: "behavior", Kind: KindString, Default: "smooth", Usage: "scroll behavior: smooth or auto"},
 	)},
-	{Name: "waitFor", Flags: page(
+	{Name: "waitFor", Flags: framePage(
 		Flag{Name: "selector", Kind: KindString, Usage: "css selector to wait for"},
 		Flag{Name: "text", Kind: KindString, Usage: "page text to wait for"},
 		Flag{Name: "url", Kind: KindString, Usage: "url substring to wait for"},
@@ -113,30 +113,30 @@ var Commands = []Spec{
 		Flag{Name: "waitForImages", Kind: KindBool, Default: true, Usage: "wait for images to decode"},
 		Flag{Name: "skipReadiness", Kind: KindBool, Usage: "capture without the readiness check"},
 	)},
-	{Name: "handleConsent", Flags: page(
+	{Name: "handleConsent", Flags: framePage(
 		Flag{Name: "scanTimeout", Kind: KindInt, Default: 3000, Usage: "consent banner scan timeout in ms"},
 	)},
-	{Name: "getPageState", Flags: page(
+	{Name: "getPageState", Flags: framePage(
 		Flag{Name: "maxHeadings", Kind: KindInt, Default: 30, Usage: "maximum headings returned"},
 		Flag{Name: "maxLinks", Kind: KindInt, Default: 50, Usage: "maximum links returned"},
 		Flag{Name: "maxButtons", Kind: KindInt, Default: 30, Usage: "maximum buttons returned"},
 		Flag{Name: "maxInputs", Kind: KindInt, Default: 30, Usage: "maximum inputs returned"},
 		Flag{Name: "maxImages", Kind: KindInt, Default: 20, Usage: "maximum images returned"},
 	)},
-	{Name: "getAccessibilitySnapshot", Flags: page(
+	{Name: "getAccessibilitySnapshot", Flags: framePage(
 		Flag{Name: "selector", Kind: KindString, Default: "body", Usage: "subtree root selector"},
 		Flag{Name: "maxDepth", Kind: KindInt, Default: 5, Usage: "maximum tree depth"},
 		Flag{Name: "maxNodes", Kind: KindInt, Default: 200, Usage: "maximum nodes returned"},
 	)},
-	{Name: "getElementInfo", Flags: page(
+	{Name: "getElementInfo", Flags: framePage(
 		Flag{Name: "selector", Kind: KindString, Usage: "css selector to inspect"},
 		Flag{Name: "text", Kind: KindString, Usage: "exact visible text of the element, alternative to --selector"},
 		Flag{Name: "scope", Kind: KindString, Usage: "css selector of the element to search inside, only with --text"},
 	)},
-	{Name: "evaluate", Flags: page(
+	{Name: "evaluate", Flags: framePage(
 		Flag{Name: "expression", Kind: KindString, Usage: "javascript expression to run in the page"},
 	)},
-	{Name: "getConsoleLogs", Flags: page(
+	{Name: "getConsoleLogs", Flags: framePage(
 		Flag{Name: "level", Kind: KindString, Usage: "filter by level: log, info, warn, error"},
 		Flag{Name: "clear", Kind: KindBool, Usage: "clear the buffer after reading"},
 		Flag{Name: "limit", Kind: KindInt, Default: 100, Usage: "maximum entries returned"},
@@ -148,6 +148,18 @@ var Commands = []Spec{
 		Flag{Name: "limit", Kind: KindInt, Default: 50, Usage: "maximum entries returned"},
 		Flag{Name: "includeHeaders", Kind: KindBool, Usage: "include request and response headers"},
 	)},
+	{Name: "watchFrames", Flags: []Flag{
+		{Name: "match", Kind: KindString, Usage: "glob the child frame document url must match, default every child frame"},
+		tabID("tab to observe, defaults to the session active tab"),
+	}},
+	{Name: "unwatchFrames", Flags: []Flag{
+		tabID("tab to stop observing, defaults to the session active tab"),
+	}},
+	{Name: "listFrames", Flags: []Flag{
+		{Name: "match", Kind: KindString, Usage: "glob the child frame document url must match"},
+		{Name: "timeout", Kind: KindInt, Default: 0, Usage: "wait up to this many ms for the first matching child frame"},
+		tabID("tab to list, defaults to the session active tab"),
+	}},
 }
 
 // page appends the tab and window selectors every page command accepts.
@@ -158,10 +170,25 @@ func page(flags ...Flag) []Flag {
 	return append(out, tabID("target tab, defaults to the session active tab"), windowID("target window"))
 }
 
+// framePage appends the child-frame selector the document-local page commands
+// accept on top of the tab and window selectors. screenshot and navigate run on
+// the whole tab and keep the plain page flags.
+func framePage(flags ...Flag) []Flag {
+	return append(page(flags...), frameID())
+}
+
 func tabID(usage string) Flag {
 	return Flag{Name: "tabId", Kind: KindInt, Usage: usage}
 }
 
 func windowID(usage string) Flag {
 	return Flag{Name: "windowId", Kind: KindInt, Usage: usage}
+}
+
+func frameID() Flag {
+	return Flag{
+		Name:  "frameId",
+		Kind:  KindInt,
+		Usage: "child frame to run in, from listFrames; 0 is the top document",
+	}
 }

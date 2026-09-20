@@ -128,6 +128,26 @@ func TestFlagKindsReachParams(t *testing.T) {
 			args: []string{"getElementInfo", "--text", "Apply", "--scope", "#dialog"},
 			want: map[string]any{"text": "Apply", "scope": "#dialog"},
 		},
+		{
+			name: "watchFrames with a match glob",
+			args: []string{"watchFrames", "--tabId", "16", "--match", "*y.uno*"},
+			want: map[string]any{"tabId": 16, "match": "*y.uno*"},
+		},
+		{
+			name: "unwatchFrames by tab",
+			args: []string{"unwatchFrames", "--tabId", "16"},
+			want: map[string]any{"tabId": 16},
+		},
+		{
+			name: "listFrames with a wait budget",
+			args: []string{"listFrames", "--tabId", "16", "--timeout", "5000"},
+			want: map[string]any{"tabId": 16, "timeout": 5000},
+		},
+		{
+			name: "page command targets a child frame",
+			args: []string{"type", "--tabId", "16", "--frameId", "7", "--selector", "input", "--text", "4111"},
+			want: map[string]any{"tabId": 16, "frameId": 7, "selector": "input", "text": "4111"},
+		},
 	}
 
 	for _, tt := range tests {

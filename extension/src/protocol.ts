@@ -82,6 +82,9 @@ export type CommandName =
   | "evaluate"
   | "getConsoleLogs"
   | "getNetworkRequests"
+  | "watchFrames"
+  | "unwatchFrames"
+  | "listFrames"
 
 export const COMMANDS: readonly CommandName[] = commandTable.map((spec) => spec.name as CommandName)
 
@@ -122,6 +125,7 @@ export const ERROR_CODES = [
   "SCREENSHOT_TOO_LARGE",
   "EVALUATE_DISABLED",
   "AMBIGUOUS_TEXT",
+  "FRAME_NOT_OBSERVED",
 ] as const
 
 export type ErrorCode = (typeof ERROR_CODES)[number]

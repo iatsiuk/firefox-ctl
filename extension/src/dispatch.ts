@@ -9,6 +9,7 @@ import { FrameRegistry } from "./frames"
 import { attachTab, detachTab, listAllTabs } from "./handlers/attached"
 import { getNetworkRequests } from "./handlers/devtools"
 import { PAGE_COMMANDS, pageHandlers } from "./handlers/dom"
+import { listFrames, unwatchFrames, watchFrames } from "./handlers/frames"
 import { screenshot } from "./handlers/screenshot"
 import { closeTab, closeWindow, getActiveTab, getTabs, navigate } from "./handlers/tabs"
 import {
@@ -370,6 +371,9 @@ export function createDispatcher(browser: Browser, env: Environment): Dispatcher
   dispatcher.register("setViewport", setViewport)
   dispatcher.register("screenshot", screenshot)
   dispatcher.register("getNetworkRequests", getNetworkRequests)
+  dispatcher.register("watchFrames", watchFrames)
+  dispatcher.register("unwatchFrames", unwatchFrames)
+  dispatcher.register("listFrames", listFrames)
   for (const command of PAGE_COMMANDS) {
     dispatcher.register(command, pageHandlers[command])
   }

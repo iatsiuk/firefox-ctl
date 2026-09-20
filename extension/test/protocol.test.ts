@@ -69,8 +69,8 @@ describe("commands.json", () => {
     expect(ours).toBe(go)
   })
 
-  test("COMMANDS lists all 30 command names in fixture order", () => {
-    expect(COMMANDS.length).toBe(30)
+  test("COMMANDS lists all 33 command names in fixture order", () => {
+    expect(COMMANDS.length).toBe(33)
     expect(COMMANDS[0]).toBe("ping")
     expect(COMMANDS[1]).toBe("version")
     expect(COMMANDS).toContain("getNetworkRequests")
@@ -110,6 +110,9 @@ describe("commands.json", () => {
       evaluate: true,
       getConsoleLogs: true,
       getNetworkRequests: true,
+      watchFrames: true,
+      unwatchFrames: true,
+      listFrames: true,
     }
     expect(Object.keys(union).sort()).toEqual([...COMMANDS].sort())
   })
@@ -216,6 +219,7 @@ describe("ExtensionError", () => {
       "SCREENSHOT_TOO_LARGE",
       "EVALUATE_DISABLED",
       "AMBIGUOUS_TEXT",
+      "FRAME_NOT_OBSERVED",
     ])
     for (const code of ERROR_CODES) {
       expect(new ExtensionError(code, "text").message).toBe(`${code}: text`)

@@ -11,6 +11,7 @@ import { start } from "../src/app"
 import commandTable from "../src/commands.json"
 import { resetConsoleCapture } from "../src/content/console"
 import { realPage } from "../src/content/page"
+import { PAGE_COMMANDS } from "../src/handlers/dom"
 import { startPage } from "../src/page"
 import type { ExtensionResponse, HostCommand, JsonObject } from "../src/protocol"
 import { ERROR_CODES } from "../src/protocol"
@@ -789,7 +790,7 @@ describe("the whole command table", () => {
     }
   })
 
-  test("all 30 commands answer a host frame with their declared flags", async () => {
+  test("all 33 commands answer a host frame with their declared flags", async () => {
     const browser = userBrowser()
     const { port } = session(browser)
     contentTab(browser)
@@ -865,6 +866,9 @@ describe("the whole command table", () => {
           windowId,
         },
       ],
+      ["watchFrames", { match: "*secured-fields*", tabId }],
+      ["listFrames", { match: "*secured-fields*", timeout: 0, tabId }],
+      ["unwatchFrames", { tabId }],
       ["closeTab", { tabId }],
       ["closeWindow", {}],
     ]
@@ -875,5 +879,28 @@ describe("the whole command table", () => {
     }
 
     expect([...seen].sort()).toEqual(commandTable.map((entry) => entry.name).sort())
+  })
+
+  test("the page rows keep their targeting flags and only they take a frame", () => {
+    for (const command of PAGE_COMMANDS) {
+      const flags = flagsOf(command)
+      expect(`${command}: ${[...flags].filter((name) => name.endsWith("Id")).join(",")}`).toBe(
+        `${command}: tabId,windowId,frameId`,
+      )
+    }
+    // tab-wide or background commands that take a tab but never a child frame
+    for (const command of ["navigate", "screenshot", "getNetworkRequests"]) {
+      expect(flagsOf(command).has("tabId")).toBe(true)
+      expect(flagsOf(command).has("windowId")).toBe(true)
+      expect(`${command} frameId: ${flagsOf(command).has("frameId")}`).toBe(
+        `${command} frameId: false`,
+      )
+    }
+    for (const command of ["watchFrames", "unwatchFrames", "listFrames"]) {
+      expect(flagsOf(command).has("tabId")).toBe(true)
+      expect(`${command} frameId: ${flagsOf(command).has("frameId")}`).toBe(
+        `${command} frameId: false`,
+      )
+    }
   })
 })

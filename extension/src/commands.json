@@ -18,18 +18,9 @@
   { "name": "getActiveTab", "flags": [] },
   { "name": "getTabs", "flags": [] },
   { "name": "listAllTabs", "flags": [] },
-  {
-    "name": "attachTab",
-    "flags": [{ "name": "tabId", "kind": "int" }]
-  },
-  {
-    "name": "detachTab",
-    "flags": [{ "name": "tabId", "kind": "int" }]
-  },
-  {
-    "name": "closeTab",
-    "flags": [{ "name": "tabId", "kind": "int" }]
-  },
+  { "name": "attachTab", "flags": [{ "name": "tabId", "kind": "int" }] },
+  { "name": "detachTab", "flags": [{ "name": "tabId", "kind": "int" }] },
+  { "name": "closeTab", "flags": [{ "name": "tabId", "kind": "int" }] },
   { "name": "closeWindow", "flags": [] },
   { "name": "getWindows", "flags": [] },
   {
@@ -59,7 +50,8 @@
       { "name": "maxLength", "kind": "int", "default": 50000 },
       { "name": "tail", "kind": "int" },
       { "name": "tabId", "kind": "int" },
-      { "name": "windowId", "kind": "int" }
+      { "name": "windowId", "kind": "int" },
+      { "name": "frameId", "kind": "int" }
     ]
   },
   {
@@ -71,7 +63,8 @@
       { "name": "autoWait", "kind": "bool", "default": true },
       { "name": "waitTimeout", "kind": "int" },
       { "name": "tabId", "kind": "int" },
-      { "name": "windowId", "kind": "int" }
+      { "name": "windowId", "kind": "int" },
+      { "name": "frameId", "kind": "int" }
     ]
   },
   {
@@ -83,7 +76,8 @@
       { "name": "autoWait", "kind": "bool" },
       { "name": "waitTimeout", "kind": "int" },
       { "name": "tabId", "kind": "int" },
-      { "name": "windowId", "kind": "int" }
+      { "name": "windowId", "kind": "int" },
+      { "name": "frameId", "kind": "int" }
     ]
   },
   {
@@ -96,7 +90,8 @@
       { "name": "altKey", "kind": "bool" },
       { "name": "metaKey", "kind": "bool" },
       { "name": "tabId", "kind": "int" },
-      { "name": "windowId", "kind": "int" }
+      { "name": "windowId", "kind": "int" },
+      { "name": "frameId", "kind": "int" }
     ]
   },
   {
@@ -107,7 +102,8 @@
       { "name": "y", "kind": "int" },
       { "name": "behavior", "kind": "string", "default": "smooth" },
       { "name": "tabId", "kind": "int" },
-      { "name": "windowId", "kind": "int" }
+      { "name": "windowId", "kind": "int" },
+      { "name": "frameId", "kind": "int" }
     ]
   },
   {
@@ -119,7 +115,8 @@
       { "name": "timeout", "kind": "int", "default": 10000 },
       { "name": "interval", "kind": "int", "default": 100 },
       { "name": "tabId", "kind": "int" },
-      { "name": "windowId", "kind": "int" }
+      { "name": "windowId", "kind": "int" },
+      { "name": "frameId", "kind": "int" }
     ]
   },
   {
@@ -142,7 +139,8 @@
     "flags": [
       { "name": "scanTimeout", "kind": "int", "default": 3000 },
       { "name": "tabId", "kind": "int" },
-      { "name": "windowId", "kind": "int" }
+      { "name": "windowId", "kind": "int" },
+      { "name": "frameId", "kind": "int" }
     ]
   },
   {
@@ -154,7 +152,8 @@
       { "name": "maxInputs", "kind": "int", "default": 30 },
       { "name": "maxImages", "kind": "int", "default": 20 },
       { "name": "tabId", "kind": "int" },
-      { "name": "windowId", "kind": "int" }
+      { "name": "windowId", "kind": "int" },
+      { "name": "frameId", "kind": "int" }
     ]
   },
   {
@@ -164,7 +163,8 @@
       { "name": "maxDepth", "kind": "int", "default": 5 },
       { "name": "maxNodes", "kind": "int", "default": 200 },
       { "name": "tabId", "kind": "int" },
-      { "name": "windowId", "kind": "int" }
+      { "name": "windowId", "kind": "int" },
+      { "name": "frameId", "kind": "int" }
     ]
   },
   {
@@ -174,7 +174,8 @@
       { "name": "text", "kind": "string" },
       { "name": "scope", "kind": "string" },
       { "name": "tabId", "kind": "int" },
-      { "name": "windowId", "kind": "int" }
+      { "name": "windowId", "kind": "int" },
+      { "name": "frameId", "kind": "int" }
     ]
   },
   {
@@ -182,7 +183,8 @@
     "flags": [
       { "name": "expression", "kind": "string" },
       { "name": "tabId", "kind": "int" },
-      { "name": "windowId", "kind": "int" }
+      { "name": "windowId", "kind": "int" },
+      { "name": "frameId", "kind": "int" }
     ]
   },
   {
@@ -192,7 +194,8 @@
       { "name": "clear", "kind": "bool" },
       { "name": "limit", "kind": "int", "default": 100 },
       { "name": "tabId", "kind": "int" },
-      { "name": "windowId", "kind": "int" }
+      { "name": "windowId", "kind": "int" },
+      { "name": "frameId", "kind": "int" }
     ]
   },
   {
@@ -205,6 +208,19 @@
       { "name": "includeHeaders", "kind": "bool" },
       { "name": "tabId", "kind": "int" },
       { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "watchFrames",
+    "flags": [{ "name": "match", "kind": "string" }, { "name": "tabId", "kind": "int" }]
+  },
+  { "name": "unwatchFrames", "flags": [{ "name": "tabId", "kind": "int" }] },
+  {
+    "name": "listFrames",
+    "flags": [
+      { "name": "match", "kind": "string" },
+      { "name": "timeout", "kind": "int", "default": 0 },
+      { "name": "tabId", "kind": "int" }
     ]
   }
 ]

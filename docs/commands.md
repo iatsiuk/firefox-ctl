@@ -332,6 +332,16 @@ arrive, and a `screenshot` issued right after one can capture a page that is sti
 
 All page commands additionally accept `tabId` and `windowId`.
 
+## Child frames
+
+| Command | Params | Notes |
+|---|---|---|
+| watchFrames | [match], [tabId] | `{tabId, match, watching: true}`; observes child frames loaded from now on |
+| unwatchFrames | [tabId] | `{tabId, watching: false, released}` |
+| listFrames | [match], [timeout=0], [tabId] | `{tabId, watching, frames: [{frameId, url, parentFrameId}]}` |
+
+Full description in the next revision of this section.
+
 ## Dropped
 
 - MCP server and its tool wrappers

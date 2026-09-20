@@ -22,7 +22,7 @@ const RETRY_INTERVAL_MS = 100
 // subtracted from the remaining command budget so this wait's own timer fires
 // strictly before the dispatcher's COMMAND_TIMEOUT, even when the requested
 // timeout is at or above the remaining budget
-const WAIT_TIMEOUT_MARGIN_MS = 100
+export const WAIT_TIMEOUT_MARGIN_MS = 100
 
 /**
  * Resolves as soon as the tab's URL matches the glob. The wait is event-driven,
