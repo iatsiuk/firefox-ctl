@@ -8,16 +8,13 @@
 
 import type { Browser, FrameNavigationDetails, Port } from "./browser"
 import type { Environment } from "./env"
+import { DEACTIVATE_MESSAGE, FRAME_PORT_NAME } from "./frame-port"
 import { globToRegExp } from "./glob"
 
-/** Port name the frame side of the content script connects with. */
-export const FRAME_PORT_NAME = "firefox-ctl-frame"
+export { DEACTIVATE_MESSAGE, FRAME_PORT_NAME }
 
 /** The script injected into a watched child frame. */
 export const FRAME_SCRIPT_FILE = "/dist/content.js"
-
-/** Tells a frame script to stop answering; posted to every port on unwatch. */
-export const DEACTIVATE_MESSAGE = { type: "deactivate" } as const
 
 /** One observed child frame, as reported by listFrames. */
 export interface FrameInfo {

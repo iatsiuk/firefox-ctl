@@ -3,6 +3,8 @@
 // may observe about the page (rects, computed styles, scroll position,
 // location, frame nesting) is stubbed here, because happy-dom has no layout.
 
+import { Window as HappyWindow } from "happy-dom"
+
 import type { Page, PageConsole, RafCallback } from "../src/content/page"
 import { nativeValueSetter } from "../src/content/page"
 
@@ -271,6 +273,27 @@ export function stubTop(win: Window, isTop: boolean): void {
     configurable: true,
     value: isTop ? win : ({ name: "outer" } as unknown as Window),
   })
+}
+
+export interface IsolatedWindow {
+  win: Window
+  doc: Document
+}
+
+/**
+ * A window of its own, so per-document state such as the `startPage` guard
+ * cannot leak from one test into the next; the shared happy-dom globals stay
+ * untouched.
+ */
+export function isolatedWindow(isTop = true): IsolatedWindow {
+  const win = new HappyWindow() as unknown as Window
+  stubTop(win, isTop)
+  return { win, doc: win.document }
+}
+
+/** An isolated window that reports itself as a child frame. */
+export function childWindow(): IsolatedWindow {
+  return isolatedWindow(false)
 }
 
 /** happy-dom reports `interactive` for ever; the readiness check reads it. */

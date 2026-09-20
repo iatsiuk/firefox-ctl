@@ -15,7 +15,7 @@ import { startPage } from "../src/page"
 import type { ExtensionResponse, HostCommand, JsonObject } from "../src/protocol"
 import { ERROR_CODES } from "../src/protocol"
 import { writeEvaluateEnabled } from "../src/settings"
-import { stubRect } from "./dom"
+import { stubRect, stubTop } from "./dom"
 import { FakeBrowser, FakeEnvironment, type FakePort } from "./fakes"
 import errors from "./fixtures/errors.json"
 
@@ -348,6 +348,11 @@ const FIXTURE_HTML = `
   </main>
 `
 
+// the shared happy-dom window carries the top document of every scenario, and
+// `startPage` installs itself once per document: the content side is therefore
+// a single browser reused across the runs, as a real tab reuses its script
+let contentBrowser: FakeBrowser | undefined
+
 /**
  * Puts a real content script on the other end of `tabs.sendMessage`: the
  * background page's frame travels the registry over happy-dom, so a page
@@ -361,14 +366,16 @@ function contentTab(browser: FakeBrowser): void {
   for (const target of document.querySelectorAll("*")) {
     stubRect(target, { width: 100, height: 20 })
   }
-  const contentBrowser = new FakeBrowser()
-  startPage(contentBrowser, realPage())
+  stubTop(window, true)
+  contentBrowser ??= new FakeBrowser()
+  const content = contentBrowser
+  startPage(content, realPage())
   // every background send names its frame, so a stray broadcast fails the run
   browser.sendMessageHandler = (_tabId, message, options) => {
     if (options === undefined) {
       return Promise.reject(new Error("tabs.sendMessage was called without a frame target"))
     }
-    return contentBrowser.emitRuntimeMessage(message)
+    return content.emitRuntimeMessage(message)
   }
 }
 
