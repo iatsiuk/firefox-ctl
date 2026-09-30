@@ -5,7 +5,7 @@ import type { Cookie, Tab } from "../src/browser"
 import { CaptureLocks } from "../src/capture-locks"
 import type { HandlerDeps } from "../src/dispatch"
 import { FrameRegistry } from "../src/frames"
-import { exportCookies, resolveCookieStore } from "../src/handlers/cookies"
+import { exportCookies, resolveCookieStore, setCookie } from "../src/handlers/cookies"
 import { NetworkTracker } from "../src/network"
 import type { JsonObject } from "../src/protocol"
 import { commandContext } from "../src/protocol"
@@ -18,6 +18,7 @@ interface Harness {
   deps: HandlerDeps
   session: Session
   run(params?: JsonObject): Promise<JsonObject>
+  set(params: JsonObject): Promise<JsonObject>
 }
 
 /** A managed window whose active tab 1 is in `store`, plus a plain tab 2. */
@@ -67,6 +68,7 @@ function harness(tab: Partial<Tab> = { cookieStoreId: "firefox-default" }): Harn
     deps,
     session,
     run: async (params = {}) => (await exportCookies(params, deps)) as JsonObject,
+    set: async (params) => (await setCookie(params, deps)) as JsonObject,
   }
 }
 
@@ -250,5 +252,230 @@ describe("exportCookies", () => {
     const { browser, run } = harness()
     await expect(run({ domain: 7 })).rejects.toThrow("domain must be a string.")
     expect(browser.cookieJar.queries).toEqual([])
+  })
+})
+
+describe("setCookie", () => {
+  function stored(result: JsonObject): Cookie {
+    return result.cookie as unknown as Cookie
+  }
+
+  test("sets a cookie from url, name and value in the resolved store", async () => {
+    const { browser, set } = harness()
+    const result = await set({ url: "https://example.com/", name: "sid", value: "s1" })
+    expect(result.store).toBe("firefox-default")
+    expect(browser.cookieSets).toEqual([
+      { url: "https://example.com/", name: "sid", value: "s1", storeId: "firefox-default" },
+    ])
+    expect(stored(result)).toEqual({
+      name: "sid",
+      value: "s1",
+      domain: "example.com",
+      hostOnly: true,
+      path: "/",
+      secure: false,
+      httpOnly: false,
+      sameSite: "unspecified",
+      session: true,
+      storeId: "firefox-default",
+      firstPartyDomain: "",
+      partitionKey: null,
+    })
+  })
+
+  test("the cookie comes from a re-query, never from the set answer", async () => {
+    const { browser, set } = harness()
+    browser.cookieSetHandler = async (details) => {
+      await browser.writeCookie(details)
+      return null
+    }
+    const result = await set({ url: "https://example.com/", name: "sid", value: "s1" })
+    expect(stored(result).value).toBe("s1")
+    expect(browser.cookieQueries).toEqual([
+      { name: "sid", storeId: "firefox-default", partitionKey: {}, firstPartyDomain: null },
+    ])
+  })
+
+  test("writes into the store of another tab or an explicit storeId", async () => {
+    const { set } = harness()
+    const byTab = await set({ url: "https://example.com/", name: "a", value: "1", tabId: 2 })
+    expect(byTab.store).toBe("firefox-container-2")
+    expect(stored(byTab).storeId).toBe("firefox-container-2")
+    const byStore = await set({
+      url: "https://example.com/",
+      name: "a",
+      value: "1",
+      storeId: "firefox-container-3",
+    })
+    expect(stored(byStore).storeId).toBe("firefox-container-3")
+  })
+
+  test("domain without url derives the url, https when secure", async () => {
+    const { browser, set } = harness()
+    const plain = await set({ domain: "example.com", name: "a", value: "1" })
+    expect(browser.cookieSets[0]?.url).toBe("http://example.com/")
+    expect(browser.cookieSets[0]?.domain).toBe("example.com")
+    expect(stored(plain).domain).toBe(".example.com")
+    expect(stored(plain).hostOnly).toBe(false)
+    await set({ domain: ".example.com", name: "b", value: "2", secure: true })
+    expect(browser.cookieSets[1]?.url).toBe("https://example.com/")
+  })
+
+  test("path, secure, httpOnly, sameSite and a fractional expirationDate pass through", async () => {
+    const { browser, set } = harness()
+    const result = await set({
+      url: "https://example.com/",
+      name: "sid",
+      value: "s1",
+      path: "/app",
+      secure: true,
+      httpOnly: true,
+      sameSite: "unspecified",
+      expirationDate: 4_000_000_000.75,
+    })
+    expect(browser.cookieSets[0]).toEqual({
+      url: "https://example.com/",
+      name: "sid",
+      value: "s1",
+      path: "/app",
+      secure: true,
+      httpOnly: true,
+      sameSite: "unspecified",
+      expirationDate: 4_000_000_000.75,
+      storeId: "firefox-default",
+    })
+    expect(stored(result)).toMatchObject({
+      path: "/app",
+      secure: true,
+      httpOnly: true,
+      sameSite: "unspecified",
+      session: false,
+      expirationDate: 4_000_000_000.75,
+    })
+    for (const sameSite of ["lax", "strict", "no_restriction"] as const) {
+      const other = await set({ url: "https://example.com/", name: "s", secure: true, sameSite })
+      expect(stored(other).sameSite).toBe(sameSite)
+    }
+  })
+
+  test("no expirationDate makes a session cookie", async () => {
+    const { browser, set } = harness()
+    const result = await set({ url: "https://example.com/", name: "sid", value: "s1" })
+    expect("expirationDate" in (browser.cookieSets[0] ?? {})).toBe(false)
+    expect(stored(result).session).toBe(true)
+  })
+
+  test("an empty name sets an unnamed cookie", async () => {
+    const { set } = harness()
+    const result = await set({ url: "https://example.com/", name: "", value: "v" })
+    expect(stored(result).name).toBe("")
+    expect(stored(result).value).toBe("v")
+  })
+
+  test("firstPartyDomain and partitionKey pass through unchanged", async () => {
+    const { browser, set } = harness()
+    const fpi = await set({
+      url: "https://example.com/",
+      name: "f",
+      value: "1",
+      firstPartyDomain: "example.com",
+    })
+    expect(browser.cookieSets[0]?.firstPartyDomain).toBe("example.com")
+    expect(stored(fpi).firstPartyDomain).toBe("example.com")
+    const partitionKey = { topLevelSite: "https://top.test", hasCrossSiteAncestor: true }
+    const part = await set({
+      url: "https://widget.test/",
+      name: "p",
+      value: "1",
+      secure: true,
+      partitionKey,
+    })
+    expect(browser.cookieSets[1]?.partitionKey).toEqual(partitionKey)
+    expect(stored(part).partitionKey).toEqual(partitionKey)
+    await set({ url: "https://widget.test/", name: "q", value: "1", partitionKey: null })
+    expect("partitionKey" in (browser.cookieSets[2] ?? {})).toBe(false)
+  })
+
+  test("malformed params are refused before Firefox is asked", async () => {
+    const { browser, set } = harness()
+    const cases: [JsonObject, string][] = [
+      [{ url: "https://example.com/" }, "name is required."],
+      [{ url: "https://example.com/", name: 7 }, "name must be a string."],
+      [{ name: "sid", value: "1" }, "setCookie needs --url or --domain."],
+      [
+        { url: "https://example.com/", name: "sid", sameSite: "none" },
+        "sameSite must be one of no_restriction, lax, strict, unspecified.",
+      ],
+      [{ url: "https://example.com/", name: "sid", value: 1 }, "value must be a string."],
+      [{ url: "https://example.com/", name: "sid", secure: "yes" }, "secure must be a boolean."],
+      [
+        { url: "https://example.com/", name: "sid", expirationDate: "soon" },
+        "expirationDate must be a number.",
+      ],
+      [
+        { url: "https://example.com/", name: "sid", partitionKey: "top" },
+        "partitionKey must be an object or null.",
+      ],
+    ]
+    for (const [params, message] of cases) {
+      await expect(set(params)).rejects.toThrow(message)
+    }
+    expect(browser.cookieSets).toEqual([])
+    expect(browser.cookieQueries).toEqual([])
+  })
+
+  test("a Firefox rejection is a plain error naming the cookie", async () => {
+    const { set } = harness()
+    await expect(
+      set({ url: "http://example.com/", name: "sid", value: "1", sameSite: "no_restriction" }),
+    ).rejects.toThrow(
+      "Cannot set cookie sid: Cookie “sid” rejected because it has the “SameSite=None” attribute",
+    )
+  })
+
+  test("a cookie missing from the re-query is an error", async () => {
+    const { browser, set } = harness()
+    browser.cookieSetHandler = () => Promise.resolve(null)
+    await expect(set({ url: "https://example.com/", name: "sid", value: "1" })).rejects.toThrow(
+      "Firefox did not store cookie sid.",
+    )
+    await expect(
+      set({ url: "https://example.com/", name: "sid", value: "1", expirationDate: 4_000_000_000 }),
+    ).rejects.toThrow("Firefox did not store cookie sid.")
+  })
+
+  test("a past expirationDate deletes the cookie and returns null", async () => {
+    const { browser, set } = harness()
+    await browser.cookieJar.write({ url: "https://example.com/", name: "sid", value: "old" })
+    const result = await set({
+      url: "https://example.com/",
+      name: "sid",
+      value: "",
+      expirationDate: 0.5,
+    })
+    expect(result).toEqual({ store: "firefox-default", cookie: null })
+    expect(await browser.cookieJar.getAll({ storeId: "firefox-default" })).toEqual([])
+  })
+
+  test("a host-only cookie under an older parent-domain one is returned, not the parent", async () => {
+    const { browser, set } = harness()
+    await browser.cookieJar.write({
+      url: "https://example.com/",
+      name: "sid",
+      value: "parent",
+      domain: "example.com",
+    })
+    const result = await set({ url: "https://sub.example.com/", name: "sid", value: "child" })
+    expect(stored(result)).toMatchObject({
+      domain: "sub.example.com",
+      hostOnly: true,
+      value: "child",
+    })
+  })
+
+  test("a path other than the url path returns the stored cookie, not null", async () => {
+    const { set } = harness()
+    const result = await set({ url: "https://example.com/", name: "sid", value: "1", path: "/app" })
+    expect(stored(result)).toMatchObject({ path: "/app", value: "1" })
   })
 })

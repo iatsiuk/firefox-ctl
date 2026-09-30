@@ -232,5 +232,21 @@
       { "name": "storeId", "kind": "string" },
       { "name": "tabId", "kind": "int" }
     ]
+  },
+  {
+    "name": "setCookie",
+    "flags": [
+      { "name": "url", "kind": "string" },
+      { "name": "name", "kind": "string" },
+      { "name": "value", "kind": "string" },
+      { "name": "domain", "kind": "string" },
+      { "name": "path", "kind": "string" },
+      { "name": "secure", "kind": "bool" },
+      { "name": "httpOnly", "kind": "bool" },
+      { "name": "sameSite", "kind": "string" },
+      { "name": "expirationDate", "kind": "float" },
+      { "name": "storeId", "kind": "string" },
+      { "name": "tabId", "kind": "int" }
+    ]
   }
 ]

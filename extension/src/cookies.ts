@@ -22,15 +22,29 @@ export function isSameSite(value: unknown): value is SameSiteStatus {
   return SAME_SITE.includes(value as SameSiteStatus)
 }
 
-function optionalString(params: JsonObject, key: string): string | undefined {
+interface FieldTypes {
+  string: string
+  boolean: boolean
+  number: number
+}
+
+function optional<K extends keyof FieldTypes>(
+  params: JsonObject,
+  key: string,
+  type: K,
+): FieldTypes[K] | undefined {
   const value = params[key]
   if (value === undefined || value === null) {
     return undefined
   }
-  if (typeof value !== "string") {
-    throw new Error(`${key} must be a string.`)
+  if (typeof value !== type) {
+    throw new Error(`${key} must be a ${type}.`)
   }
-  return value
+  return value as FieldTypes[K]
+}
+
+function optionalString(params: JsonObject, key: string): string | undefined {
+  return optional(params, key, "string")
 }
 
 /**
@@ -183,6 +197,64 @@ export function setDetails(entry: CookieEntry, storeId: string): CookieSetDetail
   }
   if (entry.partitionKey !== null) {
     details.partitionKey = { ...entry.partitionKey }
+  }
+  return details
+}
+
+function requiredName(params: JsonObject): string {
+  if (params.name === undefined || params.name === null) {
+    throw new Error("name is required.")
+  }
+  return optionalString(params, "name") as string
+}
+
+function optionalSameSite(params: JsonObject): SameSiteStatus | undefined {
+  const value = params.sameSite
+  if (value === undefined || value === null) {
+    return undefined
+  }
+  if (!isSameSite(value)) {
+    throw new Error(`sameSite must be one of ${SAME_SITE.join(", ")}.`)
+  }
+  return value
+}
+
+/**
+ * The cookies.set details for setCookie params, without the store. Without
+ * `url` the url is the origin of `domain`; every other field goes along only
+ * when given, so Firefox applies its own defaults.
+ */
+export function setCookieDetails(params: JsonObject): CookieSetDetails {
+  const name = requiredName(params)
+  const url = optionalString(params, "url")
+  const domain = optionalString(params, "domain")
+  const secure = optional(params, "secure", "boolean")
+  if (!url && !domain) {
+    throw new Error("setCookie needs --url or --domain.")
+  }
+  const partitionKey = parsePartitionKey(params.partitionKey)
+  if (typeof partitionKey === "string") {
+    throw new Error(partitionKey)
+  }
+  const fields: Partial<CookieSetDetails> = {
+    domain,
+    path: optionalString(params, "path"),
+    secure,
+    httpOnly: optional(params, "httpOnly", "boolean"),
+    sameSite: optionalSameSite(params),
+    expirationDate: optional(params, "expirationDate", "number"),
+    firstPartyDomain: optionalString(params, "firstPartyDomain"),
+    partitionKey: partitionKey ?? undefined,
+  }
+  const details: CookieSetDetails = {
+    url: url || cookieUrl({ domain: domain as string, secure }),
+    name,
+    value: optionalString(params, "value") ?? "",
+  }
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) {
+      Object.assign(details, { [key]: value })
+    }
   }
   return details
 }

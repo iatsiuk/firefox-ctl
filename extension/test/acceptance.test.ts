@@ -791,7 +791,7 @@ describe("the whole command table", () => {
     }
   })
 
-  test("all 34 commands answer a host frame with their declared flags", async () => {
+  test("all 35 commands answer a host frame with their declared flags", async () => {
     const browser = userBrowser()
     const { port } = session(browser)
     contentTab(browser)
@@ -872,6 +872,22 @@ describe("the whole command table", () => {
       ["unwatchFrames", { tabId }],
       ["exportCookies", { url: "https://mozilla.org/", domain: "mozilla.org", name: "sid", tabId }],
       ["exportCookies", { storeId: "firefox-default" }],
+      [
+        "setCookie",
+        {
+          url: "https://mozilla.org/",
+          name: "sid",
+          value: "s1",
+          domain: "mozilla.org",
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "lax",
+          expirationDate: 4_000_000_000.5,
+          storeId: "firefox-default",
+          tabId,
+        },
+      ],
       ["closeTab", { tabId }],
       ["closeWindow", {}],
     ]

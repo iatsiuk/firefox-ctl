@@ -433,6 +433,7 @@ ones also accept `frameId`; see Child frames.
 | Command | Params | Notes |
 |---|---|---|
 | exportCookies | [url], [domain], [name], [storeId], [tabId] | `{store, total, cookies}`, every `cookies.Cookie` field, sorted by domain, path, name; partitioned and first-party-isolated cookies included |
+| setCookie | name, [value], [url] or [domain], [path], [secure], [httpOnly], [sameSite], [expirationDate], [storeId], [tabId]; `firstPartyDomain`, `partitionKey` via `--json` | `{store, cookie}`, the cookie as Firefox stored it, read back by its identity; `cookie` is `null` when `expirationDate` is already past, which deletes the cookie |
 
 Cookie commands work on one cookie store, reported as `store` in the result. Without
 `--storeId` it is the store of the target tab (`--tabId`, else the session active tab), so

@@ -2,7 +2,13 @@
 // browser.cookies and touch no session state; the pure logic lives in
 // ../cookies.
 
-import { cookieFilter, sortCookies } from "../cookies"
+import {
+  cookieFilter,
+  identityKey,
+  requestedIdentity,
+  setCookieDetails,
+  sortCookies,
+} from "../cookies"
 import type { Handler, HandlerDeps } from "../dispatch"
 import type { JsonObject, JsonValue } from "../protocol"
 import { resolveTargetTab } from "./tabs"
@@ -34,4 +40,43 @@ export const exportCookies: Handler = async (params, deps) => {
   const found = await deps.browser.cookies.getAll({ ...filter, storeId: store })
   const cookies = sortCookies(found)
   return { store, total: cookies.length, cookies } as unknown as JsonValue
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Writes one cookie. The answer of cookies.set is cookies.get(url, name),
+ * which can be a parent-domain cookie or null after a good write, so the
+ * cookie is read back by its identity instead. A past expirationDate deletes
+ * the cookie and answers null.
+ */
+export const setCookie: Handler = async (params, deps) => {
+  const requested = setCookieDetails(params)
+  const store = await resolveCookieStore(deps, params)
+  const details = { ...requested, storeId: store }
+  const name = details.name ?? ""
+  try {
+    await deps.browser.cookies.set(details)
+  } catch (error) {
+    throw new Error(`Cannot set cookie ${name}: ${errorText(error)}`)
+  }
+  const wanted = requestedIdentity(details)
+  const found = await deps.browser.cookies.getAll({
+    name,
+    storeId: store,
+    partitionKey: {},
+    firstPartyDomain: null,
+  })
+  const cookie = found.find((candidate) => identityKey(candidate) === wanted)
+  if (cookie) {
+    return { store, cookie } as unknown as JsonValue
+  }
+  const expired =
+    details.expirationDate !== undefined && details.expirationDate * 1000 <= deps.env.now()
+  if (expired) {
+    return { store, cookie: null }
+  }
+  throw new Error(`Firefox did not store cookie ${name}.`)
 }
