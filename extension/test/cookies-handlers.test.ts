@@ -3,11 +3,13 @@ import { describe, expect, test } from "bun:test"
 import { AttachedTabs } from "../src/attached"
 import type { Cookie, CookieSetDetails, Tab } from "../src/browser"
 import { CaptureLocks } from "../src/capture-locks"
+import { sortCookies } from "../src/cookies"
 import type { HandlerDeps } from "../src/dispatch"
 import { FrameRegistry } from "../src/frames"
 import {
   deleteCookies,
   exportCookies,
+  importCookies,
   resolveCookieStore,
   setCookie,
 } from "../src/handlers/cookies"
@@ -25,6 +27,7 @@ interface Harness {
   run(params?: JsonObject): Promise<JsonObject>
   set(params: JsonObject): Promise<JsonObject>
   del(params: JsonObject): Promise<JsonObject>
+  imp(params: JsonObject): Promise<JsonObject>
 }
 
 /** A managed window whose active tab 1 is in `store`, plus a plain tab 2. */
@@ -76,6 +79,7 @@ function harness(tab: Partial<Tab> = { cookieStoreId: "firefox-default" }): Harn
     run: async (params = {}) => (await exportCookies(params, deps)) as JsonObject,
     set: async (params) => (await setCookie(params, deps)) as JsonObject,
     del: async (params) => (await deleteCookies(params, deps)) as JsonObject,
+    imp: async (params) => (await importCookies(params, deps)) as JsonObject,
   }
 }
 
@@ -720,6 +724,195 @@ describe("deleteCookies", () => {
     const { browser, del } = harness({ cookieStoreId: "firefox-private", incognito: true })
     browser.allowedIncognitoAccess = false
     await expect(del({ all: true })).rejects.toThrow(
+      "Extension disallowed access to the private cookies storeId.",
+    )
+  })
+})
+
+describe("importCookies", () => {
+  const every = { partitionKey: {}, firstPartyDomain: null }
+
+  function entry(fields: Partial<Cookie>): Cookie {
+    return {
+      name: "sid",
+      value: "1",
+      domain: "example.com",
+      hostOnly: true,
+      path: "/",
+      secure: false,
+      httpOnly: false,
+      sameSite: "unspecified",
+      session: true,
+      storeId: "firefox-container-2",
+      firstPartyDomain: "",
+      partitionKey: null,
+      ...fields,
+    }
+  }
+
+  // an export of another store: every field an import must keep
+  const exported: Cookie[] = [
+    entry({ name: "", value: "anon" }),
+    entry({
+      name: "sid",
+      value: "s1",
+      domain: ".example.com",
+      hostOnly: false,
+      secure: true,
+      httpOnly: true,
+      sameSite: "strict",
+      session: false,
+      expirationDate: 4_000_000_000.25,
+    }),
+    entry({ name: "fpi", firstPartyDomain: "example.com", path: "/app" }),
+    entry({
+      name: "part",
+      domain: "widget.test",
+      secure: true,
+      sameSite: "no_restriction",
+      partitionKey: { topLevelSite: "https://example.com", hasCrossSiteAncestor: true },
+    }),
+  ]
+
+  function withoutStore(cookie: Cookie): Omit<Cookie, "storeId"> {
+    const { storeId: _storeId, ...rest } = cookie
+    return rest
+  }
+
+  async function stored(browser: FakeBrowser, storeId = "firefox-default"): Promise<Cookie[]> {
+    return await browser.cookieJar.getAll({ storeId, ...every })
+  }
+
+  function exportFile(cookies: Cookie[]): JsonObject {
+    return {
+      store: "firefox-container-2",
+      total: cookies.length,
+      cookies: cookies as unknown as JsonObject[],
+    }
+  }
+
+  test("writes an export into the resolved store and keeps every field", async () => {
+    const { browser, imp } = harness()
+    const result = await imp(exportFile(exported))
+    expect(result).toEqual({ store: "firefox-default", imported: 4, failed: [] })
+    const found = await stored(browser)
+    expect(found.every((cookie) => cookie.storeId === "firefox-default")).toBe(true)
+    expect(sortCookies(found).map(withoutStore)).toEqual(sortCookies(exported).map(withoutStore))
+    expect(await stored(browser, "firefox-container-2")).toEqual([])
+  })
+
+  test("sets every entry, then verifies them with one re-query of the store", async () => {
+    const { browser, imp } = harness()
+    const queriesAtSet: number[] = []
+    browser.cookieSetHandler = async (details) => {
+      queriesAtSet.push(browser.cookieQueries.length)
+      await browser.writeCookie(details)
+      return null
+    }
+    const result = await imp({ cookies: exported as unknown as JsonObject[] })
+    expect(result.imported).toBe(4)
+    expect(queriesAtSet).toEqual([0, 0, 0, 0])
+    expect(browser.cookieQueries).toEqual([{ storeId: "firefox-default", ...every }])
+    expect(browser.cookieSets.map((details) => details.storeId)).toEqual(
+      Array(4).fill("firefox-default"),
+    )
+  })
+
+  test("a typed storeId moves an export into that store", async () => {
+    const { browser, run, imp } = harness()
+    const jar = browser.cookieJar
+    await jar.write({ url: "https://example.com/", name: "a", value: "1" })
+    await jar.write({ url: "https://example.com/", name: "b", value: "2", domain: "example.com" })
+    const source = await run()
+    const result = await imp({ ...source, storeId: "firefox-private" })
+    expect(result).toEqual({ store: "firefox-private", imported: 2, failed: [] })
+    const moved = await stored(browser, "firefox-private")
+    expect(sortCookies(moved).map(withoutStore)).toEqual(cookies(source).map(withoutStore))
+    expect((await stored(browser)).length).toBe(2)
+  })
+
+  test("writes into the store of another tab", async () => {
+    const { browser, imp } = harness()
+    const result = await imp({ cookies: [exported[0]] as unknown as JsonObject[], tabId: 2 })
+    expect(result).toMatchObject({ store: "firefox-container-2", imported: 1 })
+    expect((await stored(browser, "firefox-container-2")).length).toBe(1)
+  })
+
+  test("an empty array imports nothing", async () => {
+    const { browser, imp } = harness()
+    expect(await imp({ cookies: [] })).toEqual({
+      store: "firefox-default",
+      imported: 0,
+      failed: [],
+    })
+    expect(browser.cookieSets).toEqual([])
+  })
+
+  test("cookies missing or not an array is refused before Firefox is asked", async () => {
+    const { browser, imp } = harness()
+    await expect(imp({})).rejects.toThrow("cookies is required.")
+    for (const value of [{}, "c.json", 3]) {
+      await expect(imp({ cookies: value })).rejects.toThrow("cookies must be an array.")
+    }
+    expect(browser.cookieQueries).toEqual([])
+    expect(browser.cookieSets).toEqual([])
+  })
+
+  test("bad entries land in failed and the rest are imported", async () => {
+    const { browser, imp } = harness({ cookieStoreId: "firefox-default" })
+    browser.cookieSetHandler = (details) =>
+      details.name === "lost" ? Promise.resolve(null) : browser.writeCookie(details)
+    const entries = [
+      entry({ name: "ok" }),
+      { name: 7, domain: "example.com" },
+      "not a cookie",
+      entry({ name: "none", sameSite: "no_restriction", secure: false }),
+      entry({
+        name: "both",
+        secure: true,
+        firstPartyDomain: "example.com",
+        partitionKey: { topLevelSite: "https://top.test" },
+      }),
+      entry({ name: "lost" }),
+      entry({ name: "old", session: false, expirationDate: 0.5 }),
+      entry({ name: "ok2", domain: "other.test" }),
+    ]
+    const result = await imp({ cookies: entries as unknown as JsonObject[] })
+    expect(result.imported).toBe(2)
+    expect(result.failed).toEqual([
+      { name: "", domain: "example.com", error: "name must be a string." },
+      { name: "", domain: "", error: "cookie must be an object." },
+      {
+        name: "none",
+        domain: "example.com",
+        error:
+          "Cookie “none” rejected because it has the “SameSite=None” attribute but is missing the “secure” attribute.",
+      },
+      {
+        name: "both",
+        domain: "example.com",
+        error: "Partitioned cookies cannot have a 'firstPartyDomain' attribute.",
+      },
+      { name: "old", domain: "example.com", error: "expired" },
+      { name: "lost", domain: "example.com", error: "Firefox did not store the cookie." },
+    ])
+    expect(browser.cookieSets.some((details) => details.name === "old")).toBe(false)
+    expect((await stored(browser)).map((cookie) => cookie.name).sort()).toEqual(["ok", "ok2"])
+  })
+
+  test("a session entry with a stale expirationDate is still imported", async () => {
+    const { browser, imp } = harness()
+    const result = await imp({
+      cookies: [entry({ session: true, expirationDate: 0.5 })] as unknown as JsonObject[],
+    })
+    expect(result).toMatchObject({ imported: 1, failed: [] })
+    expect((await stored(browser))[0]?.session).toBe(true)
+  })
+
+  test("a private store without incognito access surfaces Firefox's error", async () => {
+    const { browser, imp } = harness({ cookieStoreId: "firefox-private", incognito: true })
+    browser.allowedIncognitoAccess = false
+    await expect(imp({ cookies: [] })).rejects.toThrow(
       "Extension disallowed access to the private cookies storeId.",
     )
   })

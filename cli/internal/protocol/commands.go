@@ -182,6 +182,8 @@ var Commands = []Spec{
 		Flag{Name: "name", Kind: KindString, Usage: "only cookies with this name"},
 		Flag{Name: "all", Kind: KindBool, Usage: "every cookie of the store, required without a filter"},
 	)},
+	// the cookies array arrives through --json, typically an exportCookies file
+	{Name: "importCookies", Flags: cookieStore()},
 }
 
 // page appends the tab and window selectors every page command accepts.

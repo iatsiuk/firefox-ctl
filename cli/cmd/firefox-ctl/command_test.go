@@ -446,6 +446,40 @@ func assertUsageError(t *testing.T, err error, wantText, out string) {
 	}
 }
 
+func TestImportCookiesFromExportFile(t *testing.T) {
+	t.Parallel()
+
+	export := `{"store":"firefox-default","total":2,"cookies":[` +
+		`{"name":"sid","value":"s1","domain":".example.com","hostOnly":false,"path":"/",` +
+		`"secure":true,"httpOnly":true,"sameSite":"strict","session":false,` +
+		`"expirationDate":4000000000.25,"storeId":"firefox-default","firstPartyDomain":"",` +
+		`"partitionKey":null},` +
+		`{"name":"","value":"anon","domain":"widget.test","hostOnly":true,"path":"/",` +
+		`"secure":true,"httpOnly":false,"sameSite":"no_restriction","session":true,` +
+		`"storeId":"firefox-default","firstPartyDomain":"",` +
+		`"partitionKey":{"topLevelSite":"https://example.com","hasCrossSiteAncestor":true}}]}`
+
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{"c.json": export})
+
+	rec, out, err := run(t, "importCookies", "--storeId", "firefox-private", "--json", "@"+filepath.Join(dir, "c.json"))
+	if err != nil {
+		t.Fatalf("execute: %v (%s)", err, out)
+	}
+
+	if rec.command != "importCookies" {
+		t.Errorf("command %q, want importCookies", rec.command)
+	}
+
+	var want map[string]any
+	if err := json.Unmarshal([]byte(export), &want); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	want["storeId"] = "firefox-private"
+	assertParams(t, rec.params, want)
+}
+
 func TestJSONFlagAbsentIsNoOp(t *testing.T) {
 	t.Parallel()
 

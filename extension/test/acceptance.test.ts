@@ -73,17 +73,21 @@ function session(browser: FakeBrowser) {
   return { handle, port: livePort(browser) }
 }
 
-/** Sends one host frame, checking its params against the CLI flag table first. */
+/**
+ * Sends one host frame, checking its params against the CLI flag table first.
+ * `json` is what `--json` overlays: no flag declares it, so it is not checked.
+ */
 async function run(
   port: FakePort,
   command: string,
   params: JsonObject = {},
+  json: JsonObject = {},
 ): Promise<ExtensionResponse> {
   const flags = flagsOf(command)
   for (const name of Object.keys(params)) {
     expect(`${command} --${name}`).toBe(flags.has(name) ? `${command} --${name}` : "undeclared")
   }
-  port.emitMessage(hostCommand(command, command, params))
+  port.emitMessage(hostCommand(command, command, { ...params, ...json }))
   // page commands wait on animation frames and poll intervals, so the reply
   // needs real time rather than a fixed number of turns of the event loop
   const deadline = Date.now() + 5000
@@ -791,7 +795,7 @@ describe("the whole command table", () => {
     }
   })
 
-  test("all 36 commands answer a host frame with their declared flags", async () => {
+  test("all 37 commands answer a host frame with their declared flags", async () => {
     const browser = userBrowser()
     const { port } = session(browser)
     contentTab(browser)
@@ -818,7 +822,7 @@ describe("the whole command table", () => {
       statusCode: 200,
     })
 
-    const frames: [string, JsonObject][] = [
+    const frames: [string, JsonObject, JsonObject?][] = [
       ["ping", {}],
       ["version", {}],
       ["canNavigate", {}],
@@ -890,16 +894,45 @@ describe("the whole command table", () => {
       ],
       ["deleteCookies", { url: "https://mozilla.org/", domain: "mozilla.org", name: "sid", tabId }],
       ["deleteCookies", { all: true, storeId: "firefox-default" }],
+      [
+        "importCookies",
+        { storeId: "firefox-default", tabId },
+        { cookies: [{ name: "sid", value: "s1", domain: "mozilla.org", hostOnly: true }] },
+      ],
       ["closeTab", { tabId }],
       ["closeWindow", {}],
     ]
-    for (const [command, params] of frames) {
-      const reply = await run(port, command, params)
+    for (const [command, params, json] of frames) {
+      const reply = await run(port, command, params, json)
       expect(`${command}: ${reply.success ? "ok" : reply.error}`).toBe(`${command}: ok`)
       seen.add(command)
     }
 
     expect([...seen].sort()).toEqual(commandTable.map((entry) => entry.name).sort())
+  })
+
+  test("cookies survive export, delete all and import through the port", async () => {
+    const browser = userBrowser()
+    const { port } = session(browser)
+    const store = { storeId: "firefox-default" }
+    const written: JsonObject[] = [
+      { url: "https://example.com/", name: "sid", value: "s1", secure: true, httpOnly: true },
+      { domain: "example.com", name: "pref", value: "dark", expirationDate: 4_000_000_000.5 },
+    ]
+    for (const params of written) {
+      expect((await run(port, "setCookie", { ...params, ...store })).success).toBe(true)
+    }
+    const exported = result(await run(port, "exportCookies", store))
+    expect(exported.total).toBe(2)
+    expect(result(await run(port, "deleteCookies", { all: true, ...store }))).toMatchObject({
+      deleted: 2,
+      failed: [],
+    })
+    expect(result(await run(port, "exportCookies", store)).total).toBe(0)
+    // what `importCookies --storeId firefox-default --json @c.json` sends
+    const imported = result(await run(port, "importCookies", store, exported))
+    expect(imported).toEqual({ store: "firefox-default", imported: 2, failed: [] })
+    expect(result(await run(port, "exportCookies", store))).toEqual(exported)
   })
 
   test("the page rows keep their targeting flags and only they take a frame", () => {

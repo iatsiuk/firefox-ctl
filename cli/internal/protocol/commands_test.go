@@ -24,7 +24,7 @@ var allowedCommands = []string{
 	"grantTabSpace", "getSlotRequests", "cleanupOrphanedTabs",
 	"setPrivateMode", "goodbye", "handleConsent", "getWindowMode",
 	"watchFrames", "unwatchFrames", "listFrames", "exportCookies", "setCookie",
-	"deleteCookies",
+	"deleteCookies", "importCookies",
 }
 
 var droppedCommands = []string{

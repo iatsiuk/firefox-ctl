@@ -259,5 +259,9 @@
       { "name": "storeId", "kind": "string" },
       { "name": "tabId", "kind": "int" }
     ]
+  },
+  {
+    "name": "importCookies",
+    "flags": [{ "name": "storeId", "kind": "string" }, { "name": "tabId", "kind": "int" }]
   }
 ]
