@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import type {
   Browser,
+  CookieSetDetails,
   FrameNavigationDetails,
   MessageSender,
   SendMessageOptions,
@@ -665,5 +666,280 @@ describe("FakeBrowser.extension", () => {
     expect(await denied.extension.isAllowedIncognitoAccess()).toBe(false)
     denied.allowedIncognitoAccess = true
     expect(await denied.extension.isAllowedIncognitoAccess()).toBe(true)
+  })
+})
+
+describe("FakeBrowser.cookies", () => {
+  const future = 4_000_000_000
+
+  async function seeded(): Promise<FakeBrowser> {
+    const browser = new FakeBrowser()
+    await browser.cookies.set({ url: "https://example.com/", name: "host", value: "1" })
+    await browser.cookies.set({
+      url: "https://example.com/",
+      name: "wide",
+      value: "2",
+      domain: "example.com",
+      path: "/",
+      expirationDate: future,
+    })
+    await browser.cookies.set({
+      url: "https://sub.example.com/app/",
+      name: "deep",
+      value: "3",
+      path: "/app",
+      secure: true,
+    })
+    await browser.cookies.set({ url: "https://other.test/", name: "other", value: "4" })
+    return browser
+  }
+
+  const names = (cookies: { name: string }[]) => cookies.map((cookie) => cookie.name)
+
+  test("getAll filters by url host, path and secure", async () => {
+    const browser = await seeded()
+    await browser.cookies.set({ url: "https://sub.example.com/", name: "safe", secure: true })
+
+    expect(names(await browser.cookies.getAll({ url: "https://sub.example.com/app/x" }))).toEqual([
+      "wide",
+      "deep",
+      "safe",
+    ])
+    expect(names(await browser.cookies.getAll({ url: "https://sub.example.com/" }))).toEqual([
+      "wide",
+      "safe",
+    ])
+    expect(names(await browser.cookies.getAll({ url: "http://sub.example.com/app/" }))).toEqual([
+      "wide",
+    ])
+    expect(names(await browser.cookies.getAll({ url: "https://example.com/" }))).toEqual([
+      "host",
+      "wide",
+    ])
+  })
+
+  test("getAll filters by domain with subdomains, by name and by store", async () => {
+    const browser = await seeded()
+    await browser.cookies.set({
+      url: "https://example.com/",
+      name: "host",
+      value: "c",
+      storeId: "firefox-container-1",
+    })
+
+    expect(names(await browser.cookies.getAll({ domain: "example.com" }))).toEqual([
+      "host",
+      "wide",
+      "deep",
+    ])
+    expect(names(await browser.cookies.getAll({ domain: "sub.example.com" }))).toEqual(["deep"])
+    expect(names(await browser.cookies.getAll({ name: "other" }))).toEqual(["other"])
+    const container = await browser.cookies.getAll({ storeId: "firefox-container-1" })
+    expect(container.map((cookie) => [cookie.name, cookie.value, cookie.storeId])).toEqual([
+      ["host", "c", "firefox-container-1"],
+    ])
+  })
+
+  test("returns full cookie fields with partitionKey null for an unpartitioned cookie", async () => {
+    const browser = await seeded()
+    const [host, wide] = await browser.cookies.getAll({ url: "https://example.com/" })
+
+    expect(host).toEqual({
+      name: "host",
+      value: "1",
+      domain: "example.com",
+      hostOnly: true,
+      path: "/",
+      secure: false,
+      httpOnly: false,
+      sameSite: "unspecified",
+      session: true,
+      storeId: "firefox-default",
+      firstPartyDomain: "",
+      partitionKey: null,
+    })
+    expect(wide?.domain).toBe(".example.com")
+    expect(wide?.hostOnly).toBe(false)
+    expect(wide?.session).toBe(false)
+    expect(wide?.expirationDate).toBe(future)
+  })
+
+  test("returns partitioned cookies only when asked with partitionKey {}", async () => {
+    const browser = new FakeBrowser()
+    await browser.cookies.set({ url: "https://a.test/", name: "plain" })
+    await browser.cookies.set({
+      url: "https://a.test/",
+      name: "part",
+      partitionKey: { topLevelSite: "https://top.test" },
+    })
+
+    expect(names(await browser.cookies.getAll({}))).toEqual(["plain"])
+    const all = await browser.cookies.getAll({ partitionKey: {} })
+    expect(names(all)).toEqual(["plain", "part"])
+    expect(all[1]?.partitionKey).toEqual({
+      topLevelSite: "https://top.test",
+      hasCrossSiteAncestor: false,
+    })
+    const scoped = await browser.cookies.getAll({
+      partitionKey: { topLevelSite: "https://top.test" },
+    })
+    expect(names(scoped)).toEqual(["part"])
+  })
+
+  test("firstPartyDomain null returns every first-party domain", async () => {
+    const browser = new FakeBrowser()
+    await browser.cookies.set({ url: "https://a.test/", name: "plain" })
+    await browser.cookies.set({ url: "https://a.test/", name: "fpi", firstPartyDomain: "a.test" })
+
+    expect(names(await browser.cookies.getAll({}))).toEqual(["plain"])
+    expect(names(await browser.cookies.getAll({ firstPartyDomain: "a.test" }))).toEqual(["fpi"])
+    expect(names(await browser.cookies.getAll({ firstPartyDomain: null }))).toEqual([
+      "plain",
+      "fpi",
+    ])
+  })
+
+  test("set requires a url", async () => {
+    const browser = new FakeBrowser()
+    const details = { name: "x" } as unknown as CookieSetDetails
+    await expect(browser.cookies.set(details)).rejects.toThrow("url")
+  })
+
+  test("set replaces a cookie with the same identity", async () => {
+    const browser = new FakeBrowser()
+    await browser.cookies.set({ url: "https://a.test/", name: "sid", value: "old" })
+    await browser.cookies.set({ url: "https://a.test/", name: "sid", value: "new", path: "/" })
+    await browser.cookies.set({
+      url: "https://a.test/",
+      name: "sid",
+      value: "dom",
+      domain: "a.test",
+    })
+
+    const cookies = await browser.cookies.getAll({})
+    expect(cookies.map((cookie) => [cookie.domain, cookie.value])).toEqual([
+      ["a.test", "new"],
+      [".a.test", "dom"],
+    ])
+  })
+
+  test("an expired set removes exactly that identity", async () => {
+    const browser = new FakeBrowser()
+    await browser.cookies.set({ url: "https://a.test/", name: "sid", domain: "a.test" })
+    await browser.cookies.set({ url: "https://sub.a.test/", name: "sid" })
+
+    const answer = await browser.cookies.set({
+      url: "https://sub.a.test/",
+      name: "sid",
+      path: "/",
+      expirationDate: 0,
+    })
+
+    // cookies.get(url, name) now finds the parent-domain cookie
+    expect(answer?.domain).toBe(".a.test")
+    const left = await browser.cookies.getAll({})
+    expect(left.map((cookie) => cookie.domain)).toEqual([".a.test"])
+  })
+
+  test("the set answer is cookies.get(url, name), not necessarily the written cookie", async () => {
+    const browser = new FakeBrowser()
+    await browser.cookies.set({ url: "https://example.com/", name: "sid", domain: "example.com" })
+
+    const shadowed = await browser.cookies.set({ url: "https://sub.example.com/", name: "sid" })
+    const offPath = await browser.cookies.set({
+      url: "https://example.com/",
+      name: "app",
+      path: "/app",
+    })
+
+    expect(shadowed?.domain).toBe(".example.com")
+    expect(offPath).toBeNull()
+    expect(browser.cookieSets).toHaveLength(3)
+  })
+
+  test("cookies differing only in firstPartyDomain or hasCrossSiteAncestor stay distinct", async () => {
+    const browser = new FakeBrowser()
+    const url = "https://a.test/"
+    await browser.cookies.set({ url, name: "sid", value: "plain" })
+    await browser.cookies.set({ url, name: "sid", value: "fpi", firstPartyDomain: "a.test" })
+    const top = "https://top.test"
+    await browser.cookies.set({
+      url,
+      name: "sid",
+      value: "p0",
+      partitionKey: { topLevelSite: top },
+    })
+    await browser.cookies.set({
+      url,
+      name: "sid",
+      value: "p1",
+      partitionKey: { topLevelSite: top, hasCrossSiteAncestor: true },
+    })
+
+    const all = await browser.cookies.getAll({ partitionKey: {}, firstPartyDomain: null })
+    expect(all.map((cookie) => cookie.value)).toEqual(["plain", "fpi", "p0", "p1"])
+  })
+
+  test("rejects what Firefox rejects", async () => {
+    const browser = new FakeBrowser()
+    const url = "https://a.test/"
+    await expect(browser.cookies.set({ url, name: "", value: "" })).rejects.toThrow("rejected")
+    await expect(
+      browser.cookies.set({ url, name: "n", sameSite: "no_restriction" }),
+    ).rejects.toThrow("secure")
+    await expect(
+      browser.cookies.set({
+        url,
+        name: "n",
+        firstPartyDomain: "a.test",
+        partitionKey: { topLevelSite: "https://top.test" },
+      }),
+    ).rejects.toThrow("firstPartyDomain")
+    await expect(browser.cookies.getAll({ storeId: "nope" })).rejects.toThrow(
+      "Invalid cookie store id",
+    )
+    expect(await browser.cookies.getAll({})).toEqual([])
+  })
+
+  test("the private store rejects without incognito access", async () => {
+    const browser = new FakeBrowser({ allowedIncognitoAccess: false })
+    const storeId = "firefox-private"
+    await expect(browser.cookies.getAll({ storeId })).rejects.toThrow(
+      "Extension disallowed access to the private cookies storeId.",
+    )
+    await expect(browser.cookies.set({ url: "https://a.test/", storeId })).rejects.toThrow(
+      "Extension disallowed access to the private cookies storeId.",
+    )
+
+    browser.allowedIncognitoAccess = true
+    await browser.cookies.set({ url: "https://a.test/", name: "p", storeId })
+    expect(names(await browser.cookies.getAll({ storeId }))).toEqual(["p"])
+    expect(await browser.cookies.getAll({})).toEqual([])
+  })
+
+  test("records queries and uses cookieSetHandler when set", async () => {
+    const browser = new FakeBrowser()
+    browser.cookieSetHandler = (details) =>
+      details.name === "bad" ? Promise.reject(new Error("nope")) : browser.writeCookie(details)
+
+    await browser.cookies.set({ url: "https://a.test/", name: "good" })
+    await expect(browser.cookies.set({ url: "https://a.test/", name: "bad" })).rejects.toThrow(
+      "nope",
+    )
+    await browser.cookies.getAll({ name: "good" })
+
+    expect(browser.cookieQueries).toEqual([{ name: "good" }])
+    expect(names(await browser.cookies.getAll({}))).toEqual(["good"])
+  })
+
+  test("tabs carry the cookie store of their window", async () => {
+    const browser = new FakeBrowser()
+    const normal = await browser.windows.create({})
+    const incognito = await browser.windows.create({ incognito: true })
+    const tab = await browser.tabs.create({ windowId: incognito.id })
+
+    expect(normal.tabs?.[0]?.cookieStoreId).toBe("firefox-default")
+    expect(incognito.tabs?.[0]?.cookieStoreId).toBe("firefox-private")
+    expect(tab.cookieStoreId).toBe("firefox-private")
   })
 })

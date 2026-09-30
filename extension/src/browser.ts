@@ -64,6 +64,8 @@ export interface Tab {
   url?: string
   title?: string
   status?: string
+  // firefox-default, firefox-private or a container store
+  cookieStoreId?: string
 }
 
 export interface TabQuery {
@@ -276,6 +278,67 @@ export interface Storage {
   readonly local: StorageArea
 }
 
+export type SameSiteStatus = "no_restriction" | "lax" | "strict" | "unspecified"
+
+// an empty key (no topLevelSite) addresses unpartitioned cookies on set and
+// every partition on getAll
+export interface PartitionKey {
+  topLevelSite?: string
+  hasCrossSiteAncestor?: boolean
+}
+
+export interface Cookie {
+  name: string
+  value: string
+  domain: string
+  hostOnly: boolean
+  path: string
+  secure: boolean
+  httpOnly: boolean
+  sameSite: SameSiteStatus
+  session: boolean
+  // fractional seconds since the epoch, absent for a session cookie
+  expirationDate?: number
+  storeId: string
+  firstPartyDomain: string
+  partitionKey: PartitionKey | null
+}
+
+export interface CookieQuery {
+  url?: string
+  domain?: string
+  name?: string
+  storeId?: string
+  // omitted: unpartitioned cookies only; {}: every partition
+  partitionKey?: PartitionKey
+  // null: every first-party domain
+  firstPartyDomain?: string | null
+}
+
+export interface CookieSetDetails {
+  url: string
+  name?: string
+  value?: string
+  // omitted for a host-only cookie
+  domain?: string
+  path?: string
+  secure?: boolean
+  httpOnly?: boolean
+  sameSite?: SameSiteStatus
+  // omitted for a session cookie
+  expirationDate?: number
+  storeId?: string
+  firstPartyDomain?: string
+  partitionKey?: PartitionKey
+}
+
+// no remove: it matches by url and name only, so it cannot address one cookie
+export interface Cookies {
+  getAll(query: CookieQuery): Promise<Cookie[]>
+  // the answer is cookies.get(url, name), which may be a different cookie
+  set(details: CookieSetDetails): Promise<Cookie | null>
+}
+
 export interface Browser {
   readonly runtime: Runtime
   readonly tabs: Tabs
@@ -284,6 +347,7 @@ export interface Browser {
   readonly extension: Extension
   readonly webRequest: WebRequest
   readonly webNavigation: WebNavigation
+  readonly cookies: Cookies
   // absent before Firefox 138
   readonly tabGroups?: TabGroups
 }

@@ -3,6 +3,10 @@ import type {
   CaptureOptions,
   CompletedDetails,
   ConnectInfo,
+  Cookie,
+  CookieQuery,
+  CookieSetDetails,
+  Cookies,
   ErrorDetails,
   Event,
   ExecuteScriptDetails,
@@ -11,6 +15,7 @@ import type {
   Manifest,
   MessageListener,
   MessageSender,
+  PartitionKey,
   Port,
   PortError,
   RequestDetails,
@@ -156,6 +161,247 @@ export interface FakeBrowserOptions {
 
 const DEFAULT_GEOMETRY = { width: 1280, height: 800, left: 0, top: 0 }
 
+const DEFAULT_STORE = "firefox-default"
+const PRIVATE_STORE = "firefox-private"
+
+function storeOf(incognito: boolean | undefined): string {
+  return incognito ? PRIVATE_STORE : DEFAULT_STORE
+}
+
+interface StoredCookie {
+  cookie: Cookie
+  created: number
+}
+
+function urlHost(url: URL): string {
+  return url.hostname.replace(/^\[(.*)\]$/, "$1")
+}
+
+// the directory of the url path, what Firefox takes when set gets no path
+function defaultPath(url: URL): string {
+  const last = url.pathname.lastIndexOf("/")
+  return last <= 0 ? "/" : url.pathname.slice(0, last)
+}
+
+function pathMatches(requestPath: string, cookiePath: string): boolean {
+  if (requestPath === cookiePath) {
+    return true
+  }
+  return (
+    requestPath.startsWith(cookiePath) &&
+    (cookiePath.endsWith("/") || requestPath[cookiePath.length] === "/")
+  )
+}
+
+function hostMatches(host: string, cookie: Cookie): boolean {
+  if (cookie.hostOnly) {
+    return host === cookie.domain
+  }
+  const domain = cookie.domain.replace(/^\./, "")
+  return host === domain || host.endsWith(`.${domain}`)
+}
+
+function urlMatches(url: URL, cookie: Cookie): boolean {
+  if (cookie.secure && url.protocol !== "https:") {
+    return false
+  }
+  return hostMatches(urlHost(url), cookie) && pathMatches(url.pathname, cookie.path)
+}
+
+function normalPartition(key: PartitionKey | undefined | null): PartitionKey | null {
+  if (!key?.topLevelSite) {
+    return null
+  }
+  return { topLevelSite: key.topLevelSite, hasCrossSiteAncestor: key.hasCrossSiteAncestor ?? false }
+}
+
+function samePartition(a: PartitionKey | null, b: PartitionKey | null): boolean {
+  return a?.topLevelSite === b?.topLevelSite && a?.hasCrossSiteAncestor === b?.hasCrossSiteAncestor
+}
+
+function sameIdentity(a: Cookie, b: Cookie): boolean {
+  return (
+    a.domain === b.domain &&
+    a.hostOnly === b.hostOnly &&
+    a.path === b.path &&
+    a.name === b.name &&
+    a.firstPartyDomain === b.firstPartyDomain &&
+    samePartition(a.partitionKey, b.partitionKey)
+  )
+}
+
+function partitionWanted(query: CookieQuery, cookie: Cookie): boolean {
+  if (query.partitionKey === undefined) {
+    return cookie.partitionKey === null
+  }
+  const wanted = normalPartition(query.partitionKey)
+  return wanted === null || samePartition(wanted, cookie.partitionKey)
+}
+
+function queryMatches(query: CookieQuery, cookie: Cookie): boolean {
+  if (query.name !== undefined && cookie.name !== query.name) {
+    return false
+  }
+  if (
+    query.firstPartyDomain !== null &&
+    cookie.firstPartyDomain !== (query.firstPartyDomain ?? "")
+  ) {
+    return false
+  }
+  if (!partitionWanted(query, cookie)) {
+    return false
+  }
+  if (query.domain !== undefined) {
+    const wanted = query.domain.replace(/^\./, "").toLowerCase()
+    const domain = cookie.domain.replace(/^\./, "")
+    if (domain !== wanted && !domain.endsWith(`.${wanted}`)) {
+      return false
+    }
+  }
+  return query.url === undefined || urlMatches(new URL(query.url), cookie)
+}
+
+function validationError(details: CookieSetDetails): string | undefined {
+  const name = details.name ?? ""
+  if (name === "" && (details.value ?? "") === "") {
+    return "Cookie with an empty name and an empty value has been rejected."
+  }
+  if (details.sameSite === "no_restriction" && details.secure !== true) {
+    return `Cookie “${name}” rejected because it has the “SameSite=None” attribute but is missing the “secure” attribute.`
+  }
+  if (details.firstPartyDomain && details.partitionKey?.topLevelSite) {
+    return "Partitioned cookies cannot have a 'firstPartyDomain' attribute."
+  }
+  return undefined
+}
+
+/**
+ * An in-memory cookie store with the Firefox semantics handlers rely on:
+ * identity by domain, host-only, path, name and origin attributes; partitioned
+ * and first-party cookies hidden unless asked for; an expired set deleting;
+ * and a set answer that is `cookies.get(url, name)`, not the written cookie.
+ */
+export class FakeCookieJar implements Cookies {
+  readonly queries: CookieQuery[] = []
+  readonly sets: CookieSetDetails[] = []
+  // replaces the jar's own set; the jar stays reachable through write
+  setHandler?: (details: CookieSetDetails) => Promise<Cookie | null>
+  now: () => number = () => Date.now() / 1000
+
+  private readonly stores = new Map<string, StoredCookie[]>()
+  private created = 0
+
+  constructor(private readonly privateAllowed: () => boolean) {}
+
+  getAll(query: CookieQuery): Promise<Cookie[]> {
+    this.queries.push(query)
+    const storeId = query.storeId ?? DEFAULT_STORE
+    const refused = this.storeError(storeId)
+    if (refused) {
+      return Promise.reject(new Error(refused))
+    }
+    const found = this.storeCookies(storeId)
+      .filter((stored) => queryMatches(query, stored.cookie))
+      .map((stored) => this.copy(stored.cookie))
+    return Promise.resolve(found)
+  }
+
+  set(details: CookieSetDetails): Promise<Cookie | null> {
+    this.sets.push(details)
+    if (this.setHandler) {
+      return this.setHandler(details)
+    }
+    return this.write(details)
+  }
+
+  write(details: CookieSetDetails): Promise<Cookie | null> {
+    if (typeof details.url !== "string") {
+      return Promise.reject(
+        new Error('Type error for parameter details (Property "url" is required) for cookies.set.'),
+      )
+    }
+    const storeId = details.storeId ?? DEFAULT_STORE
+    const refused = this.storeError(storeId) ?? validationError(details)
+    if (refused) {
+      return Promise.reject(new Error(refused))
+    }
+    const url = new URL(details.url)
+    const cookie = this.build(url, details, storeId)
+    const cookies = this.storeCookies(storeId).filter(
+      (stored) => !sameIdentity(stored.cookie, cookie),
+    )
+    const expired = cookie.expirationDate !== undefined && cookie.expirationDate <= this.now()
+    if (!expired) {
+      cookies.push({ cookie, created: this.created++ })
+    }
+    this.stores.set(storeId, cookies)
+    return Promise.resolve(this.lookup(url, cookie))
+  }
+
+  private build(url: URL, details: CookieSetDetails, storeId: string): Cookie {
+    const cookie: Cookie = {
+      name: details.name ?? "",
+      value: details.value ?? "",
+      domain:
+        details.domain === undefined
+          ? urlHost(url)
+          : `.${details.domain.replace(/^\./, "").toLowerCase()}`,
+      hostOnly: details.domain === undefined,
+      path: details.path ?? defaultPath(url),
+      secure: details.secure ?? false,
+      httpOnly: details.httpOnly ?? false,
+      sameSite: details.sameSite ?? "unspecified",
+      session: details.expirationDate === undefined,
+      storeId,
+      firstPartyDomain: details.firstPartyDomain ?? "",
+      partitionKey: normalPartition(details.partitionKey),
+    }
+    if (details.expirationDate !== undefined) {
+      cookie.expirationDate = details.expirationDate
+    }
+    return cookie
+  }
+
+  // what ext-cookies.js answers set with: cookies.get(url, name), the match
+  // with the longest path, then the earliest creation
+  private lookup(url: URL, written: Cookie): Cookie | null {
+    const candidates = this.storeCookies(written.storeId)
+      .filter(
+        (stored) =>
+          stored.cookie.name === written.name &&
+          stored.cookie.firstPartyDomain === written.firstPartyDomain &&
+          samePartition(stored.cookie.partitionKey, written.partitionKey) &&
+          urlMatches(url, stored.cookie),
+      )
+      .sort((a, b) => b.cookie.path.length - a.cookie.path.length || a.created - b.created)
+    const found = candidates[0]
+    return found ? this.copy(found.cookie) : null
+  }
+
+  private storeError(storeId: string): string | undefined {
+    if (storeId === PRIVATE_STORE) {
+      return this.privateAllowed()
+        ? undefined
+        : "Extension disallowed access to the private cookies storeId."
+    }
+    if (storeId === DEFAULT_STORE || /^firefox-container-\d+$/.test(storeId)) {
+      return undefined
+    }
+    return `Invalid cookie store id: "${storeId}"`
+  }
+
+  private storeCookies(storeId: string): StoredCookie[] {
+    return this.stores.get(storeId) ?? []
+  }
+
+  private copy(cookie: Cookie): Cookie {
+    return {
+      ...cookie,
+      partitionKey: cookie.partitionKey === null ? null : { ...cookie.partitionKey },
+    }
+  }
+}
+
 export class FakeBrowser implements Browser {
   readonly runtime: Runtime
   readonly tabs: Tabs
@@ -164,8 +410,10 @@ export class FakeBrowser implements Browser {
   readonly extension: Extension
   readonly webRequest: WebRequest
   readonly webNavigation: WebNavigation
+  readonly cookies: Cookies
   readonly tabGroups?: TabGroups
 
+  readonly cookieJar = new FakeCookieJar(() => this.allowedIncognitoAccess)
   readonly ports: FakePort[] = []
   readonly connectedPorts: FakePort[] = []
   readonly connectedHosts: string[] = []
@@ -266,6 +514,10 @@ export class FakeBrowser implements Browser {
       onErrorOccurred: this.requestsFailed,
     }
     this.webNavigation = { onDOMContentLoaded: this.framesLoaded }
+    this.cookies = {
+      getAll: (query) => this.cookieJar.getAll(query),
+      set: (details) => this.cookieJar.set(details),
+    }
     this.extension = {
       isAllowedIncognitoAccess: () => Promise.resolve(this.allowedIncognitoAccess),
     }
@@ -275,6 +527,25 @@ export class FakeBrowser implements Browser {
         update: (groupId, properties) => this.updateGroup(groupId, properties),
       }
     }
+  }
+
+  get cookieQueries(): CookieQuery[] {
+    return this.cookieJar.queries
+  }
+
+  get cookieSets(): CookieSetDetails[] {
+    return this.cookieJar.sets
+  }
+
+  set cookieSetHandler(handler:
+    | ((details: CookieSetDetails) => Promise<Cookie | null>)
+    | undefined) {
+    this.cookieJar.setHandler = handler
+  }
+
+  // the jar's own set, for a cookieSetHandler that fails only some cookies
+  writeCookie(details: CookieSetDetails): Promise<Cookie | null> {
+    return this.cookieJar.write(details)
   }
 
   lastPort(): FakePort | undefined {
@@ -438,6 +709,7 @@ export class FakeBrowser implements Browser {
       active,
       pinned: false,
       incognito: window?.incognito ?? false,
+      cookieStoreId: storeOf(window?.incognito),
       url: properties.url ?? "about:blank",
     }
     if (active) {
@@ -598,6 +870,7 @@ export class FakeBrowser implements Browser {
       active: true,
       pinned: false,
       incognito,
+      cookieStoreId: storeOf(incognito),
       url: data.url ?? "about:blank",
     }
     this.tabsById.set(tab.id as number, tab)
