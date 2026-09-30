@@ -74,6 +74,16 @@ Added after the five plans, when the payment fields of a stage checkout turned o
 
 Verification: bun tests for the registry, the content-side guard, the routing and an end-to-end acceptance scenario through the port; manual smoke on the stage checkout.
 
+## Plan 7: Cookies (delivered)
+
+Added after the six plans, when a login had to move between the managed window and a normal one and there was no way to read, seed or clear cookies without the browser UI.
+
+1. The host answers a command above the 1 MB Firefox limit with `Message too large` and keeps serving instead of exiting
+2. `--json @file` and `--json -` on the root flag, so a cookie export can be fed back from a file or stdin
+3. `exportCookies`, `setCookie`, `deleteCookies`, `importCookies` over `cookies.getAll` and `cookies.set` and the `cookies` permission: the store of the target tab by default, `--storeId` to override it, partitioned and first-party-isolated cookies included, exact-identity deletion through an expired `set` and a re-query that verifies every write, since neither `cookies.remove` nor the `set` return value can address one cookie exactly
+
+Verification: Go tests for the host reply and the `--json` sources; bun tests for the pure cookie logic, the fake cookie jar, the four handlers and an export -> delete -> import round trip through the port; manual smoke in Firefox.
+
 ## After the plans
 
-The command set of `docs/commands.md` is complete: all 33 commands are registered and reachable end to end. What was dropped on purpose - MCP, the popup, multi-agent coordination, focus loops, the watermark, and every security gate except the `evaluate` opt-in - is listed under Dropped there and is not planned. The AMO listing plan added the preferences page, the data-collection declaration, the private-state rule, the Linux install path and the release pipeline.
+The command set of `docs/commands.md` is complete: all 37 commands are registered and reachable end to end. What was dropped on purpose - MCP, the popup, multi-agent coordination, focus loops, the watermark, and every security gate except the `evaluate` opt-in - is listed under Dropped there and is not planned. The AMO listing plan added the preferences page, the data-collection declaration, the private-state rule, the Linux install path and the release pipeline.

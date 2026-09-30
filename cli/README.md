@@ -81,7 +81,7 @@ Flags are the protocol parameter names verbatim, in camelCase (`--tabId`, `--max
 
 ### Global flags
 
-- `--json '{"...": ...}'` adds params the four flag kinds cannot express (objects, arrays). It must be a JSON object and it is shallow-merged over the typed flags
+- `--json '{"...": ...}'` adds params the four flag kinds cannot express (objects, arrays). It must be a JSON object and it is shallow-merged over the typed flags. `--json @file` reads the object from a file and `--json -` from stdin, curl style: `firefox-ctl exportCookies > c.json` then `firefox-ctl importCookies --json @c.json`
 - `--request-timeout <ms>` (5000-300000, default 150000) is sent as `_timeout`; the host uses it as the per-request timeout, the client waits 5 s longer. The name avoids a clash with `waitFor --timeout`
 - `--socket <path>` overrides the socket path for both host and client
 
@@ -91,7 +91,7 @@ Success prints `result` as indented JSON on stdout. A failed command prints `Err
 
 - 0 success
 - 1 the command failed (`success:false`) or the transport failed
-- 2 usage error: unknown command or flag, bad flag value, `--json` that is not an object, out-of-range `--request-timeout`
+- 2 usage error: unknown command or flag, bad flag value, `--json` that is not an object, an unreadable `--json` file or stdin, empty `--json` file or stdin content, out-of-range `--request-timeout`
 
 Common transport errors:
 
@@ -99,6 +99,7 @@ Common transport errors:
 - `connection refused, make sure the extension is connected (socket ...)`: a stale socket file with nothing listening on it
 - `host closed the connection without a response`: the host exited or crashed mid-request
 - `timed out waiting for a response from the extension`: the extension never answered within `--request-timeout`
+- `Message too large: <command> message is <n> bytes, the Firefox limit is 1048576`: the params exceed the 1 MB Firefox accepts from a native host, so the host refused the command and keeps serving; split the payload, for example a large `importCookies` file
 
 ## Layout
 

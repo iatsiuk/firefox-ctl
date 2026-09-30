@@ -1,6 +1,6 @@
 # Commands
 
-Every command the CLI and the extension understand; the ones deliberately left out are listed under Dropped. Command names, parameter names and result shapes are stable so agent prompts keep working across versions. Invocation: `firefox-ctl <command> [--key value ...]`; nested or array values via `--json '{...}'`.
+Every command the CLI and the extension understand; the ones deliberately left out are listed under Dropped. Command names, parameter names and result shapes are stable so agent prompts keep working across versions. Invocation: `firefox-ctl <command> [--key value ...]`; nested or array values via `--json '{...}'`, which is shallow-merged over the typed flags; `--json @file` reads that object from a file and `--json -` from stdin, curl style, so a large payload such as an `importCookies` batch never has to fit on the command line. An unreadable file, empty content or anything but a JSON object is a usage error (exit 2).
 
 All commands accept `--request-timeout <ms>` (5000-300000, default 150000), sent as `_timeout`; the name avoids a clash with waitFor's own `timeout` parameter. Output is JSON on stdout; errors go to stderr with a non-zero exit code and the extension's error message. The message starts with a stable prefix where one is defined: `TAB_CLOSED`, `TAB_UNAVAILABLE`, `NO_TABS`, `MODE_MISMATCH`, `RESTRICTED_PAGE`, `PAGE_LOAD_FAILED`, `CONTENT_SCRIPT_UNAVAILABLE`, `CONTENT_SCRIPT_ERROR`, `COMMAND_TIMEOUT`, `SCREENSHOT_TOO_LARGE`, `EVALUATE_DISABLED`, `AMBIGUOUS_TEXT`, `FRAME_NOT_OBSERVED`. A `details` object from the extension is not forwarded.
 
@@ -439,9 +439,55 @@ ones also accept `frameId`; see Child frames.
 
 Cookie commands work on one cookie store, reported as `store` in the result. Without
 `--storeId` it is the store of the target tab (`--tabId`, else the session active tab), so
-the private managed window uses `firefox-private` and a container tab its container store;
-`--storeId` needs no session. `firefox-private` is reachable only with "Run in Private
-Windows".
+the private managed window uses `firefox-private`, a normal window `firefox-default` and a
+container tab its container store; a tab whose `cookieStoreId` is missing falls back to
+`firefox-private` when it is incognito and `firefox-default` otherwise. `--storeId` wins and
+needs no session. `firefox-private` is reachable only with "Run in Private Windows"; without
+it Firefox's own error comes back as is. A gone `--tabId` gives `TAB_CLOSED`. The commands
+take no `frameId` and no new error prefix: Firefox rejections and parameter errors are plain
+text.
+
+The filters `--url`, `--domain` and `--name` narrow `exportCookies` and `deleteCookies` the way
+`cookies.getAll` does: `--url` matches host, path and scheme, `--domain` the domain and its
+subdomains. Both commands always query with `partitionKey: {}` and `firstPartyDomain: null`,
+so partitioned cookies (Total Cookie Protection, `partitionKey {topLevelSite,
+hasCrossSiteAncestor}`) and cookies of every first-party domain are included; an unpartitioned
+cookie carries `partitionKey: null`. `setCookie` takes `firstPartyDomain` and `partitionKey`
+only through `--json`. `name` may be empty and `expirationDate` is fractional seconds; a cookie
+without it is a session cookie.
+
+`setCookie` needs `name` and either `--url` or `--domain`; with only `--domain` the url is
+derived as `https://` for `--secure` and `http://` otherwise, and `--path` is always passed
+explicitly. Without `--domain` the cookie is host-only. The result is re-read from the store by
+the cookie's exact identity (domain, host-only flag, path, name, `firstPartyDomain`,
+`partitionKey`), because Firefox's own `set` answer can name a parent-domain cookie of the same
+name; a cookie Firefox refused is `Cannot set cookie <name>: <reason>`, one that is missing
+after the write is `Firefox did not store cookie <name>.`
+
+`deleteCookies` refuses to run without a filter and removes nothing:
+`deleteCookies needs --url, --domain, --name or --all.` With `--all` it empties the whole
+store and only that store. The guard is against a typo, not a security gate. There is no `cookies.remove` underneath, since
+it picks a cookie by url and name and can hit a parent-domain one outside the filter; each match
+is overwritten with an expired cookie of its exact identity and one re-query decides what went
+into `deleted` and what into `failed`.
+
+The export result feeds `importCookies` unchanged:
+
+```
+firefox-ctl exportCookies --domain example.com > c.json
+firefox-ctl importCookies --json @c.json
+```
+
+`storeId`, `partitionKey`, `firstPartyDomain` and `sameSite` survive the round trip. The top
+level of the export carries `store`, not `storeId`, so the file cannot silently override
+`importCookies --storeId`; an import is a transfer into the target store, never an automatic
+restore of the source store, so `importCookies --json @c.json --storeId firefox-private` moves
+a normal-window login into the private window.
+
+Firefox accepts at most 1 MB per host->extension message. A larger command, typically an
+import of a big export, is not forwarded; the host answers
+`Message too large: importCookies message is <n> bytes, the Firefox limit is 1048576`
+and keeps serving, so split the file and import it in parts.
 
 ## Dropped
 

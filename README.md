@@ -58,7 +58,7 @@ cli/firefox-ctl screenshot --purpose read-text
 cli/firefox-ctl closeWindow
 ```
 
-Use `firefox-ctl --help` or `firefox-ctl <command> --help` for flags. `--json '{...}'` supplies nested or array parameters and overrides typed flags. Every command accepts `--request-timeout <ms>` from 5000 to 300000; the default is 150000.
+Use `firefox-ctl --help` or `firefox-ctl <command> --help` for flags. `--json '{...}'` supplies nested or array parameters and overrides typed flags; `--json @file` reads the object from a file and `--json -` from stdin. Every command accepts `--request-timeout <ms>` from 5000 to 300000; the default is 150000.
 
 ## Commands
 
@@ -67,6 +67,7 @@ Use `firefox-ctl --help` or `firefox-ctl <command> --help` for flags. `--json '{
 - Page actions: `getContent`, `click`, `type`, `pressKey`, `scroll`, `waitFor`
 - Page analysis: `getPageState`, `getAccessibilitySnapshot`, `getElementInfo`, `evaluate` (opt-in, see Limitations)
 - Capture and diagnostics: `screenshot`, `handleConsent`, `getConsoleLogs`, `getNetworkRequests`
+- Cookies: `exportCookies`, `setCookie`, `deleteCookies`, `importCookies` (the store of the target tab by default, `--storeId` to pick one)
 
 The complete parameters, result shapes, and error texts are in [docs/commands.md](docs/commands.md).
 

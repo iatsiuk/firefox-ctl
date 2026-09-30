@@ -28,6 +28,7 @@ page (`options.html`), which carries the two switches described under "User-faci
 | `<all_urls>` | the user names the page to drive, so no narrower host list is possible; it backs the content script, `tabs.captureTab` and the network log |
 | `webRequest` | `getNetworkRequests` reports request and response metadata, and the screenshot readiness check waits for a tab's pending requests to settle. Listeners are read-only: there is no `webRequestBlocking`, nothing is redirected and no request body is read |
 | `webNavigation` | `watchFrames` listens for `onDOMContentLoaded` to inject the content script into a matching child frame of a watched tab. Only the frame id, parent frame id and document url of that one tab are read, never a request body |
+| `cookies` | `exportCookies`, `setCookie`, `deleteCookies` and `importCookies` read and write one cookie store, by default the one of the tab the terminal drives, so a login can be moved into the managed window or cleared without the browser UI. Only `cookies.getAll` and `cookies.set` are called, and only when the user runs one of these commands; nothing is read in the background |
 | `storage` | two `storage.local` keys hold the managed window id and the attached tab ids so a background restart re-adopts the same window instead of opening a second one, plus the two preference flags. No page data is stored |
 
 ## Data collection
@@ -46,6 +47,7 @@ be wrong even though nothing goes over the network.
 | `getConsoleLogs`, `getNetworkRequests` | console output, request and response metadata, urls with credential-looking query values stripped, response headers redacted by default | `websiteContent` |
 | `click`, `type`, `pressKey`, `scroll`, `handleConsent` | what was clicked, typed, pressed or scrolled and the resulting element state | `websiteActivity` |
 | `type` into a password field, `getContent` or `evaluate` over one | the value of a credential field | `authenticationInfo` |
+| `exportCookies`, and `setCookie`, `deleteCookies`, `importCookies` echoing what they wrote or removed | cookie names, values, domains and attributes of one cookie store, session cookies included | `authenticationInfo` |
 | `evaluate` (opt-in, off by default) | whatever the expression returns, so any of the above | the categories above |
 
 The only destination is the local native host over stdio, which prints the JSON on the

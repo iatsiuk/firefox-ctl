@@ -23,9 +23,10 @@ Every command answers over the same path: content script or background API, then
 | `getConsoleLogs`, `getNetworkRequests` | console output, request and response metadata, request urls with credential-looking query values already stripped, response headers redacted by default | `websiteContent` |
 | `click`, `type`, `pressKey`, `scroll`, `handleConsent` | what was clicked, typed, pressed or scrolled and the resulting element state | `websiteActivity` |
 | `type` into a password field, `getContent` or `evaluate` over one | the value of a credential field | `authenticationInfo` |
+| `exportCookies`, and `setCookie`, `deleteCookies`, `importCookies` echoing what they wrote or removed | cookie names, values, domains and attributes of one cookie store, session cookies included | `authenticationInfo` |
 | `evaluate` (opt-in, off by default) | whatever the expression returns, so any of the above | the categories above |
 
-`authenticationInfo` is declared rather than argued away: `type` echoes the value it typed, including into a password input, and `getContent` and `evaluate` can read one, so a credential path exists whatever the header redaction setting says. The browser user agent is not reported by any command; see the permissions notes under "Extension".
+`authenticationInfo` is declared rather than argued away: `type` echoes the value it typed, including into a password input, `getContent` and `evaluate` can read one, and `exportCookies` hands out session cookies, so a credential path exists whatever the header redaction setting says. The browser user agent is not reported by any command; see the permissions notes under "Extension".
 
 ## Native messaging
 
@@ -44,12 +45,13 @@ Every command answers over the same path: content script or background API, then
 - Startup guard: `ipc.Listen` takes a flock on a lock file next to the socket, probes an existing socket by dialing (only `ECONNREFUSED` counts as stale), unlinks only a stale socket and returns `ErrAlreadyRunning` for a live one; the listener remembers the socket's device and inode and on close never unlinks a socket a newer host has replaced
 - Per-request timeout 5000-300000 ms, default 150000 (`--request-timeout`, sent as `_timeout`); host correlates by UUID and drops pending requests when the client disconnects. The client waits `_timeout` plus 5 s
 - Connection limits: 60 s idle timeout armed on accept and disarmed by the first complete request, 10 concurrent connections, 10 MB per request line (over it the host replies `Message too large`, shuts its write side and discards the client's leftover input for at most 1 s, an absolute deadline that incoming bytes do not extend, before closing the socket and freeing the connection slot)
+- Commands above the Firefox limit: a command whose serialised host message (`id`, `type`, `command`, `params`) exceeds 1 MB is refused before a byte reaches stdout, so the framing stays intact. The host drops the pending entry and its timer and answers `Message too large: <command> message is <n> bytes, the Firefox limit is 1048576`; it keeps serving, and no late timeout reply follows. Any other stdout write error is still fatal
 - Extension-initiated messages with no matching pending id: `ping` and `version` (host version, Go version, platform) are answered, anything else is logged to stderr and dropped
 
 ## Extension
 
 - MV2, extension ID `firefox-ctl@firefox-ctl.dev`, `persistent: true`, `strict_min_version` pinned to the Firefox release installed when the manifest was last generated (155.0 as of this writing), bumped deliberately, CSP `script-src 'self'; object-src 'self'`
-- Permissions: `nativeMessaging`, `tabs`, `tabGroups` (`tabGroups.query`/`.update`, used to name and find the `firefox-ctl` group), `<all_urls>`, `webRequest` (network capture), `webNavigation` (`onDOMContentLoaded`, the injection trigger for watched child frames), `storage` (persist managed window and attached tabs across background restarts)
+- Permissions: `nativeMessaging`, `tabs`, `tabGroups` (`tabGroups.query`/`.update`, used to name and find the `firefox-ctl` group), `<all_urls>`, `webRequest` (network capture), `webNavigation` (`onDOMContentLoaded`, the injection trigger for watched child frames), `storage` (persist managed window and attached tabs across background restarts), `cookies` (`cookies.getAll` and `cookies.set` behind the four cookie commands; `cookies.remove` is never called)
 - `browser_specific_settings.gecko.data_collection_permissions.required` lists `browsingActivity`, `websiteContent`, `websiteActivity` and `authenticationInfo`, the categories of the matrix above. `none` is wrong for an add-on that hands page data to a native application, and `technicalAndInteraction` is not declared at all: it may only be optional, which would need a `permissions.request` from a user gesture, so the `browser` user agent field was dropped from the `version` result instead
 - `options_ui` opens `options.html` inside about:addons (`open_in_tab: false`); it is a static page with two checkboxes - the `evaluate` opt-in and header redaction - served by the third bundle, `dist/options.js`. It has no inline script, so the CSP stays as it is
 - Content script `run_at: document_idle`, `all_frames: false`. The top document of a tab is the only one the manifest scripts; a child frame gets the same bundle only while its tab is watched, injected per frame by `src/frames.ts` (see "Child frames")
@@ -172,6 +174,8 @@ firefox-ctl/
 │   ├── src/readiness.ts     # waitForPageReady, the gate before a capture
 │   ├── src/handlers/        # window, tab, attachment, page, screenshot and devtools handlers
 │   ├── src/handlers/frames.ts # watchFrames, unwatchFrames, listFrames
+│   ├── src/handlers/cookies.ts # store resolution, exportCookies, setCookie, deleteCookies, importCookies
+│   ├── src/cookies.ts       # pure cookie logic: filter, url, set and tombstone details, identity, sort
 │   ├── src/devices.ts       # setViewport presets
 │   ├── src/protocol.ts      # wire contract, mirrors internal/protocol
 │   ├── src/commands.json    # command names, kept equal to internal/protocol's fixture

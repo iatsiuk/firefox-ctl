@@ -637,8 +637,8 @@ describe("child frame documentation", () => {
   test.skipIf(root === undefined)("roadmap.md records the child-frame plan", async () => {
     const text = await readRootDoc(join("docs", "roadmap.md"))
     expect(text).toContain("## Plan 6: Child frames (delivered)")
-    expect(text).toContain("all 33 commands")
-    expect(text).not.toContain("all 30 commands")
+    expect(text).toContain("all 37 commands")
+    expect(text).not.toContain("all 33 commands")
   })
 
   test.skipIf(root === undefined)(
@@ -648,4 +648,86 @@ describe("child frame documentation", () => {
       expect(text).toContain("watchFrames")
     },
   )
+})
+
+describe("cookie documentation", () => {
+  test.skipIf(root === undefined)(
+    "commands.md documents the store, the round trip, the guard and the size limit",
+    async () => {
+      const text = await readRootDoc(join("docs", "commands.md"))
+      for (const phrase of [
+        "## Cookies",
+        "firefox-private",
+        "--storeId",
+        "partitionKey",
+        "firstPartyDomain",
+        "importCookies --json @c.json",
+        "deleteCookies needs --url, --domain, --name or --all.",
+        "Message too large: importCookies message is",
+        "--json @file",
+        "--json -",
+      ]) {
+        expect(text).toContain(phrase)
+      }
+    },
+  )
+
+  test.skipIf(root === undefined)(
+    "architecture.md lists the cookie data, permission, modules and oversize reply",
+    async () => {
+      const text = await readRootDoc(join("docs", "architecture.md"))
+      for (const phrase of [
+        "`exportCookies`",
+        "`cookies` (",
+        "src/cookies.ts",
+        "src/handlers/cookies.ts",
+        "the Firefox limit is 1048576",
+      ]) {
+        expect(text).toContain(phrase)
+      }
+    },
+  )
+
+  test.skipIf(root === undefined)(
+    "reviewer notes justify the cookies permission and declare the cookie data",
+    async () => {
+      const text = await readRootDoc(join("docs", "reviewer-notes.md"))
+      expect(text).toContain("| `cookies` |")
+      expect(text).toContain("| `exportCookies`")
+    },
+  )
+
+  test.skipIf(root === undefined)("roadmap.md records the cookie plan", async () => {
+    const text = await readRootDoc(join("docs", "roadmap.md"))
+    expect(text).toContain("## Plan 7: Cookies (delivered)")
+  })
+
+  test.skipIf(root === undefined)(
+    "the root and CLI READMEs list the cookie commands and the --json forms",
+    async () => {
+      const readme = await readRootDoc("README.md")
+      for (const name of ["exportCookies", "setCookie", "deleteCookies", "importCookies"]) {
+        expect(readme).toContain(name)
+      }
+      expect(readme).toContain("--json @file")
+
+      const cli = await readRootDoc(join("cli", "README.md"))
+      expect(cli).toContain("--json @file")
+      expect(cli).toContain("--json -")
+      expect(cli).toContain("unreadable `--json` file")
+    },
+  )
+
+  test("extension README walks through a cookie export and import", async () => {
+    const text = await Bun.file(join(import.meta.dir, "..", "README.md")).text()
+    for (const step of [
+      "firefox-ctl exportCookies",
+      "firefox-ctl importCookies --json @c.json",
+      "firefox-ctl deleteCookies",
+    ]) {
+      expect(text).toContain(step)
+    }
+    expect(text).toContain("src/cookies.ts")
+    expect(text).not.toContain("the 30 command names")
+  })
 })

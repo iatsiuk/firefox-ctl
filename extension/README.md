@@ -232,6 +232,30 @@ buffer after answering.
 open shadow roots, aria dialogs - and reports which one matched in `method`. A "Reject all"
 button is never clicked, and a second call on a dismissed banner reports `found: false`.
 
+## Cookies
+
+```
+cli/firefox-ctl exportCookies --domain example.com > c.json   # {store, total, cookies}
+cli/firefox-ctl deleteCookies --domain example.com            # logs the site out
+cli/firefox-ctl importCookies --json @c.json                  # {store, imported, failed}
+cli/firefox-ctl setCookie --url https://example.com --name theme --value dark
+cli/firefox-ctl exportCookies --storeId firefox-default       # no session needed
+```
+
+The four cookie commands are background commands over `cookies.getAll` and `cookies.set`.
+Without `--storeId` they use the store of the target tab, so the private managed window reads
+and writes `firefox-private` and a container tab its container; `firefox-private` needs "Run
+in Private Windows". Partitioned and first-party-isolated cookies are included, and an export
+file goes back through `importCookies` unchanged, into whatever store the import targets.
+
+`deleteCookies` refuses to run without `--url`, `--domain`, `--name` or `--all`. It overwrites
+each match with an expired cookie of the same identity rather than calling `cookies.remove`,
+which picks by url and name and can hit a parent-domain cookie, and re-reads the store to
+report what is really gone. `setCookie` and `importCookies` verify their writes the same way.
+An import above 1 MB is refused by the host with `Message too large`; split the file. The pure
+logic is in `src/cookies.ts`, the handlers in `src/handlers/cookies.ts`, and `test/fakes.ts`
+carries an in-memory cookie jar for the tests.
+
 ## Layout
 
 ```
@@ -249,7 +273,8 @@ src/session.ts      managed window, tab pool, persistence and duplicate sweep
 src/attached.ts     attached user tabs
 src/network.ts      webRequest tracker behind getNetworkRequests and readiness
 src/readiness.ts    waitForPageReady, the gate a screenshot waits on
-src/handlers/       window, tab, attachment, page (dom.ts), screenshot and devtools handlers
+src/handlers/       window, tab, attachment, page (dom.ts), screenshot, devtools, frame and cookie handlers
+src/cookies.ts      pure cookie logic: filter, url, set and tombstone details, identity, sort
 src/devices.ts      setViewport device presets
 src/protocol.ts     native wire contract, mirrors cli/internal/protocol
 src/messages.ts     in-browser messaging shapes (runtime/tabs.sendMessage)
@@ -258,7 +283,7 @@ src/content/        Page interface, action registry, the page actions and the
                     internal ones the background drives (readiness, image, consent)
 src/browser.ts      the browser.* subset used, plus realBrowser()
 src/env.ts          clock, UUIDs and timers, plus realEnvironment()
-src/commands.json   the 30 command names, kept equal to the Go fixture by a test
+src/commands.json   the 37 command names, kept equal to the Go fixture by a test
 test/               bun tests and the fakes
 ```
 
