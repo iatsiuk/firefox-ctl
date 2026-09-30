@@ -1,6 +1,6 @@
 # Roadmap
 
-Five ralphex plans, executed in order, and a sixth added afterwards. Each plan was complete, tested and linted before the next started. Plans 1 and 2 had no dependency on each other apart from `protocol` types; plans 3-5 built on 2, plan 6 on 4. All six are delivered, plus two interim plans written during execution: command deadlines and the AMO public listing. The plan files themselves are working notes and are not tracked in git.
+Five ralphex plans, executed in order, and a sixth and a seventh added afterwards. Each plan was complete, tested and linted before the next started. Plans 1 and 2 had no dependency on each other apart from `protocol` types; plans 3-5 built on 2, plan 6 on 4, plan 7 on 1 and 3. All seven are delivered, plus two interim plans written during execution: command deadlines and the AMO public listing. The plan files themselves are working notes and are not tracked in git.
 
 The interim plan came out of the plan 4 end-to-end run: a content-script reply lost to a navigation hung `executeInTab`, and because every command ran behind the previous one the whole extension stopped answering. It gave each command a deadline from `--request-timeout`, let `ping` and `version` bypass the session, moved the URL wait into the background page where it survives the navigation it waits for, and narrowed serialisation to the five commands that mutate session state. No new commands.
 

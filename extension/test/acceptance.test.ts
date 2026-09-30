@@ -164,6 +164,9 @@ describe("plan commands", () => {
     for (const [command, params] of frames) {
       const reply = await run(port, command, params)
       expect(`${command}: ${reply.success ? "ok" : reply.error}`).toBe(`${command}: ok`)
+      if (command === "importCookies") {
+        expect(result(reply)).toMatchObject({ imported: 1, failed: [] })
+      }
       seen.add(command)
     }
 

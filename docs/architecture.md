@@ -12,7 +12,7 @@ firefox-ctl <cmd> --(unix socket, NDJSON)--> firefox-ctl host --(stdio native me
 
 ## Data leaving the browser
 
-Every command answers over the same path: content script or background API, then `background.ts`, then the native host over stdio, then the socket, then the terminal that asked. The only destination is the local native host over stdio, the `firefox-ctl` binary the user installed; the extension opens no network connection of its own, has no remote endpoint and no analytics. Data is not stored either, beyond the in-memory network ring and the two `storage.local` keys of "Session state", which hold tab and window ids, never page content.
+Every command answers over the same path: content script or background API, then `background.ts`, then the native host over stdio, then the socket, then the terminal that asked. The only destination is the local native host over stdio, the `firefox-ctl` binary the user installed; the extension opens no network connection of its own, has no remote endpoint and no analytics. Data is not stored either, beyond the in-memory network ring, the two `storage.local` keys of "Session state", which hold tab and window ids, never page content, and the cookies `setCookie` and `importCookies` write into Firefox's own cookie store when asked to.
 
 | Command family | What leaves the browser | Category |
 |---|---|---|

@@ -457,16 +457,18 @@ only through `--json`. `name` may be empty and `expirationDate` is fractional se
 without it is a session cookie.
 
 `setCookie` needs `name` and either `--url` or `--domain`; with only `--domain` the url is
-derived as `https://` for `--secure` and `http://` otherwise, and `--path` is always passed
-explicitly. Without `--domain` the cookie is host-only. The result is re-read from the store by
-the cookie's exact identity (domain, host-only flag, path, name, `firstPartyDomain`,
-`partitionKey`), because Firefox's own `set` answer can name a parent-domain cookie of the same
+derived as `https://` for `--secure` and `http://` otherwise. The path is always passed
+explicitly: `--path`, else the url directory with its trailing slash, the way Firefox defaults
+it (`/app/` for `--url https://example.com/app/login`, `/` for a url derived from `--domain`).
+Without `--domain`, or with an empty one, the cookie is host-only. The result is re-read from
+the store by the cookie's exact identity (domain, host-only flag, path, name, `firstPartyDomain`,
+`partitionKey`) and must carry the value just written, because Firefox's own `set` answer can name a parent-domain cookie of the same
 name; a cookie Firefox refused is `Cannot set cookie <name>: <reason>`, one that is missing
 after the write is `Firefox did not store cookie <name>.`
 
 `deleteCookies` refuses to run without a filter and removes nothing:
-`deleteCookies needs --url, --domain, --name or --all.` With `--all` it empties the whole
-store and only that store. The guard is against a typo, not a security gate. There is no `cookies.remove` underneath, since
+`deleteCookies needs --url, --domain, --name or --all.` `--all` alone empties the whole store
+and only that store; next to `--url`, `--domain` or `--name` the filter still applies. The guard is against a typo, not a security gate. There is no `cookies.remove` underneath, since
 it picks a cookie by url and name and can hit a parent-domain one outside the filter; each match
 is overwritten with an expired cookie of its exact identity and one re-query decides what went
 into `deleted` and what into `failed`.
@@ -478,11 +480,16 @@ firefox-ctl exportCookies --domain example.com > c.json
 firefox-ctl importCookies --json @c.json
 ```
 
-`storeId`, `partitionKey`, `firstPartyDomain` and `sameSite` survive the round trip. The top
-level of the export carries `store`, not `storeId`, so the file cannot silently override
+`partitionKey`, `firstPartyDomain` and `sameSite` survive the round trip; each entry's own
+`storeId` is ignored and the cookie lands in the import's target store. The top level of the
+export carries `store`, not `storeId`, so the file cannot silently override
 `importCookies --storeId`; an import is a transfer into the target store, never an automatic
 restore of the source store, so `importCookies --json @c.json --storeId firefox-private` moves
-a normal-window login into the private window.
+a normal-window login into the private window. An entry counts as imported only when the
+re-query finds its cookie with the value sent; of two entries for the same cookie the later
+wins and the earlier lands in `failed` as `overwritten by a later entry.` An export holds live
+session cookies, so keep the file private (`umask 077` before the redirect) and delete it after
+the import.
 
 Firefox accepts at most 1 MB per host->extension message. A larger command, typically an
 import of a big export, is not forwarded; the host answers

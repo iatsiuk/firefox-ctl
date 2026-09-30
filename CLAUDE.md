@@ -53,7 +53,7 @@ A child frame watched with `watchFrames` runs the same content script in that fr
 
 ## Roadmap
 
-Six ralphex plans in order, all delivered, details in `docs/roadmap.md`: Go binary; extension skeleton (ends with the first end-to-end ping); sessions and windows; DOM actions; screenshots, DevTools and consent; child frames. Each plan is complete and tested before the next starts.
+Seven ralphex plans in order, all delivered, details in `docs/roadmap.md`: Go binary; extension skeleton (ends with the first end-to-end ping); sessions and windows; DOM actions; screenshots, DevTools and consent; child frames; cookies. Each plan is complete and tested before the next starts.
 
 ## Commands
 

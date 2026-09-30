@@ -92,6 +92,8 @@ Large replies are kept below the host's 10 MiB extension-to-host frame cap. fire
 - Content scripts cannot run on restricted browser or extension pages such as `about:` and `moz-extension:`. Those return `RESTRICTED_PAGE`. JSON, PDF, download, and other non-HTML pages return `CONTENT_SCRIPT_ERROR` when detected.
 - Page commands act on the tab's top document by default (`all_frames: false`). Child frames are opt-in per tab: `watchFrames --tabId <id>` observes the frames that tab loads from then on, `listFrames` names them, and `--frameId <id>` runs `getContent`, `click`, `type`, `handleConsent` and the other document-local commands inside one of them. A frame that loaded before the watch is not observed and answers `FRAME_NOT_OBSERVED`; `screenshot` stays tab-wide. See [docs/commands.md](docs/commands.md).
 - `getConsoleLogs` captures the content-script world, uncaught errors, and unhandled rejections. It does not capture the site's own `console.log` calls. Its result reports `scope: "content-world"`.
+- Firefox accepts at most 1 MB per command from the host. A larger one, typically a big `importCookies` file, is refused with `Message too large: ...` and the host keeps serving; split the file and import it in parts.
+- Cookie commands on the private managed window read and write `firefox-private`, which needs "Run in Private Windows"; without it Firefox's own error comes back as is. A cookie export holds live session cookies, so keep the file private.
 - A command whose page reply never arrives returns `COMMAND_TIMEOUT` at `--request-timeout`. Timed-out work is not cancelled; late results are dropped. `click`, `type`, `pressKey`, and `evaluate` are not retried automatically.
 
 ## Session model

@@ -177,10 +177,10 @@ function urlHost(url: URL): string {
   return url.hostname.replace(/^\[(.*)\]$/, "$1")
 }
 
-// the directory of the url path, what Firefox takes when set gets no path
+// what ext-cookies.js takes when set gets no path: nsIURL.directory, the url
+// path up to and including its last slash
 function defaultPath(url: URL): string {
-  const last = url.pathname.lastIndexOf("/")
-  return last <= 0 ? "/" : url.pathname.slice(0, last)
+  return url.pathname.slice(0, url.pathname.lastIndexOf("/") + 1) || "/"
 }
 
 function pathMatches(requestPath: string, cookiePath: string): boolean {

@@ -335,7 +335,7 @@ describe("requestedIdentity", () => {
     )
     expect(
       requestedIdentity({ url: "https://example.com/a/b", name: "sid", domain: "example.com" }),
-    ).toBe(identityKey(cookie({ path: "/a" })))
+    ).toBe(identityKey(cookie({ path: "/a/" })))
   })
 
   test("carries origin attributes and an IPv6 host without brackets", () => {

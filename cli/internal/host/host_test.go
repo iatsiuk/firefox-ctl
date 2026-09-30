@@ -1270,6 +1270,22 @@ func TestServerLimitsConnections(t *testing.T) {
 	}
 }
 
+// the request timed out or its client left before the oversize write
+// returned: nothing is pending, so nothing is refused or answered
+func TestServerRefuseSkipsGoneRequest(t *testing.T) {
+	t.Parallel()
+
+	logs := &safeBuffer{}
+	srv := NewServer(&Options{
+		Logger: log.New(logs, "", 0), Version: testVersion})
+
+	srv.refuse("gone", "importCookies", &nativemsg.SizeError{Size: nativemsg.MaxOutbound + 1, Max: nativemsg.MaxOutbound})
+
+	if strings.Contains(logs.String(), "refusing") {
+		t.Errorf("logs = %q, want no refusal for a request no longer pending", logs.String())
+	}
+}
+
 func TestServerReplySkipsClosedClient(t *testing.T) {
 	t.Parallel()
 

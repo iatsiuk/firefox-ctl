@@ -4,10 +4,12 @@
 
 import type { Cookie } from "../browser"
 import {
-  type CookieEntry,
   cookieFilter,
   expireDetails,
   identityKey,
+  isObject,
+  isPast,
+  optional,
   parseCookieEntry,
   requestedIdentity,
   setCookieDetails,
@@ -54,8 +56,8 @@ function errorText(error: unknown): string {
 /**
  * Writes one cookie. The answer of cookies.set is cookies.get(url, name),
  * which can be a parent-domain cookie or null after a good write, so the
- * cookie is read back by its identity instead. A past expirationDate deletes
- * the cookie and answers null.
+ * cookie is read back by its identity and value instead. A past
+ * expirationDate deletes the cookie and answers null.
  */
 export const setCookie: Handler = async (params, deps) => {
   const requested = setCookieDetails(params)
@@ -68,33 +70,17 @@ export const setCookie: Handler = async (params, deps) => {
     throw new Error(`Cannot set cookie ${name}: ${errorText(error)}`)
   }
   const wanted = requestedIdentity(details)
-  const found = await deps.browser.cookies.getAll({
-    name,
-    storeId: store,
-    partitionKey: {},
-    firstPartyDomain: null,
-  })
-  const cookie = found.find((candidate) => identityKey(candidate) === wanted)
+  const found = await deps.browser.cookies.getAll({ ...cookieFilter({ name }), storeId: store })
+  const cookie = found.find(
+    (candidate) => identityKey(candidate) === wanted && candidate.value === details.value,
+  )
   if (cookie) {
     return { store, cookie } as unknown as JsonValue
   }
-  const expired =
-    details.expirationDate !== undefined && details.expirationDate * 1000 <= deps.env.now()
-  if (expired) {
+  if (isPast(details.expirationDate, deps.env.now())) {
     return { store, cookie: null }
   }
   throw new Error(`Firefox did not store cookie ${name}.`)
-}
-
-function deleteAll(params: JsonObject): boolean {
-  const all = params.all
-  if (all === undefined || all === null) {
-    return false
-  }
-  if (typeof all !== "boolean") {
-    throw new Error("all must be a boolean.")
-  }
-  return all
 }
 
 function cookieRef(cookie: Cookie): { name: string; domain: string; path: string } {
@@ -109,7 +95,7 @@ function cookieRef(cookie: Cookie): { name: string; domain: string; path: string
  */
 export const deleteCookies: Handler = async (params, deps) => {
   const filter = cookieFilter(params)
-  const all = deleteAll(params)
+  const all = optional(params, "all", "boolean") ?? false
   const filtered =
     filter.url !== undefined || filter.domain !== undefined || filter.name !== undefined
   if (!all && !filtered) {
@@ -155,31 +141,25 @@ type EntryRef = { name: string; domain: string }
 
 // name and domain of an entry for failed, even when the entry is malformed
 function entryRef(value: JsonValue): EntryRef {
-  const raw = typeof value === "object" && value !== null && !Array.isArray(value) ? value : {}
+  const raw = isObject(value) ? value : {}
   return {
     name: typeof raw.name === "string" ? raw.name : "",
     domain: typeof raw.domain === "string" ? raw.domain : "",
   }
 }
 
-function expired(entry: CookieEntry, nowMs: number): boolean {
-  return (
-    !entry.session && entry.expirationDate !== undefined && entry.expirationDate * 1000 <= nowMs
-  )
-}
-
 /**
  * Writes a batch of cookies, typically an exportCookies result, into the
  * resolved store: a transfer, so the store of the export and of each entry
- * is ignored. One re-query after all sets tells which cookies Firefox kept;
- * the set answers are not trusted. A bad entry lands in failed and the rest
- * go on.
+ * is ignored. One re-query after all sets tells which cookies Firefox kept
+ * with the value sent; the set answers are not trusted. A bad entry lands in
+ * failed and the rest go on; of two entries for one cookie the later wins.
  */
 export const importCookies: Handler = async (params, deps) => {
   const entries = cookieEntries(params)
   const store = await resolveCookieStore(deps, params)
   const failed: (EntryRef & { error: string })[] = []
-  const sent: { ref: EntryRef; key: string }[] = []
+  const sent = new Map<string, { ref: EntryRef; value: string }>()
   for (const value of entries) {
     const ref = entryRef(value)
     const parsed = parseCookieEntry(value)
@@ -187,27 +167,30 @@ export const importCookies: Handler = async (params, deps) => {
       failed.push({ ...ref, error: parsed.error })
       continue
     }
-    if (expired(parsed.entry, deps.env.now())) {
+    if (!parsed.entry.session && isPast(parsed.entry.expirationDate, deps.env.now())) {
       failed.push({ ...ref, error: "expired" })
       continue
     }
     const details = setDetails(parsed.entry, store)
     try {
       await deps.browser.cookies.set(details)
-      sent.push({ ref, key: requestedIdentity(details) })
     } catch (error) {
       failed.push({ ...ref, error: errorText(error) })
+      continue
     }
+    const key = requestedIdentity(details)
+    const earlier = sent.get(key)
+    if (earlier) {
+      failed.push({ ...earlier.ref, error: "overwritten by a later entry." })
+      sent.delete(key)
+    }
+    sent.set(key, { ref, value: parsed.entry.value })
   }
-  const found = await deps.browser.cookies.getAll({
-    storeId: store,
-    partitionKey: {},
-    firstPartyDomain: null,
-  })
-  const kept = new Set(found.map(identityKey))
+  const found = await deps.browser.cookies.getAll({ ...cookieFilter({}), storeId: store })
+  const kept = new Map(found.map((cookie) => [identityKey(cookie), cookie.value]))
   let imported = 0
-  for (const { ref, key } of sent) {
-    if (kept.has(key)) {
+  for (const [key, { ref, value }] of sent) {
+    if (kept.get(key) === value) {
       imported++
     } else {
       failed.push({ ...ref, error: "Firefox did not store the cookie." })

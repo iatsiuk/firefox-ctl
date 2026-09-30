@@ -696,6 +696,17 @@ describe("FakeBrowser.cookies", () => {
 
   const names = (cookies: { name: string }[]) => cookies.map((cookie) => cookie.name)
 
+  test("set without a path stores the url directory with its trailing slash", async () => {
+    const browser = new FakeBrowser()
+    await browser.cookies.set({ url: "https://example.com/app/login", name: "a", value: "1" })
+    await browser.cookies.set({ url: "https://example.com/app", name: "b", value: "2" })
+    const found = await browser.cookies.getAll({ storeId: "firefox-default" })
+    expect(found.map((cookie) => `${cookie.name} ${cookie.path}`).sort()).toEqual([
+      "a /app/",
+      "b /",
+    ])
+  })
+
   test("getAll filters by url host, path and secure", async () => {
     const browser = await seeded()
     await browser.cookies.set({ url: "https://sub.example.com/", name: "safe", secure: true })

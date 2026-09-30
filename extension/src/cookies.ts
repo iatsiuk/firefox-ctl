@@ -28,8 +28,8 @@ interface FieldTypes {
   number: number
 }
 
-function optional<K extends keyof FieldTypes>(
-  params: JsonObject,
+export function optional<K extends keyof FieldTypes>(
+  params: Record<string, unknown>,
   key: string,
   type: K,
 ): FieldTypes[K] | undefined {
@@ -43,7 +43,7 @@ function optional<K extends keyof FieldTypes>(
   return value as FieldTypes[K]
 }
 
-function optionalString(params: JsonObject, key: string): string | undefined {
+export function optionalString(params: Record<string, unknown>, key: string): string | undefined {
   return optional(params, key, "string")
 }
 
@@ -75,63 +75,74 @@ export function cookieUrl(cookie: { domain: string; secure?: boolean }): string 
   return `${cookie.secure ? "https" : "http"}://${host}/`
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
+export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-type FieldCheck = [key: string, type: "string" | "boolean" | "number"]
-
-const ENTRY_FIELDS: readonly FieldCheck[] = [
-  ["name", "string"],
-  ["value", "string"],
-  ["path", "string"],
-  ["hostOnly", "boolean"],
-  ["secure", "boolean"],
-  ["httpOnly", "boolean"],
-  ["session", "boolean"],
-  ["expirationDate", "number"],
-  ["firstPartyDomain", "string"],
-]
-
-function fieldError(raw: Record<string, unknown>): string | undefined {
-  if (typeof raw.name !== "string") {
-    return "name must be a string."
-  }
-  if (typeof raw.domain !== "string" || raw.domain === "") {
-    return "domain must be a non-empty string."
-  }
-  for (const [key, type] of ENTRY_FIELDS) {
-    if (raw[key] !== undefined && typeof raw[key] !== type) {
-      return `${key} must be a ${type}.`
-    }
-  }
-  if (raw.sameSite !== undefined && !isSameSite(raw.sameSite)) {
-    return `sameSite must be one of ${SAME_SITE.join(", ")}.`
-  }
-  return undefined
+/** Whether an expirationDate in seconds is at or before `nowMs`. */
+export function isPast(expirationDate: number | undefined, nowMs: number): boolean {
+  return expirationDate !== undefined && expirationDate * 1000 <= nowMs
 }
 
-function parsePartitionKey(value: unknown): PartitionKey | null | string {
+function optionalSameSite(params: Record<string, unknown>): SameSiteStatus | undefined {
+  const value = params.sameSite
+  if (value === undefined || value === null) {
+    return undefined
+  }
+  if (!isSameSite(value)) {
+    throw new Error(`sameSite must be one of ${SAME_SITE.join(", ")}.`)
+  }
+  return value
+}
+
+function parsePartitionKey(value: unknown): PartitionKey | null {
   if (value === undefined || value === null) {
     return null
   }
   if (!isObject(value)) {
-    return "partitionKey must be an object or null."
+    throw new Error("partitionKey must be an object or null.")
   }
   const key: PartitionKey = {}
   if (value.topLevelSite !== undefined) {
     if (typeof value.topLevelSite !== "string") {
-      return "partitionKey.topLevelSite must be a string."
+      throw new Error("partitionKey.topLevelSite must be a string.")
     }
     key.topLevelSite = value.topLevelSite
   }
   if (value.hasCrossSiteAncestor !== undefined) {
     if (typeof value.hasCrossSiteAncestor !== "boolean") {
-      return "partitionKey.hasCrossSiteAncestor must be a boolean."
+      throw new Error("partitionKey.hasCrossSiteAncestor must be a boolean.")
     }
     key.hasCrossSiteAncestor = value.hasCrossSiteAncestor
   }
   return key
+}
+
+function cookieEntry(raw: Record<string, unknown>): CookieEntry {
+  if (typeof raw.name !== "string") {
+    throw new Error("name must be a string.")
+  }
+  if (typeof raw.domain !== "string" || raw.domain === "") {
+    throw new Error("domain must be a non-empty string.")
+  }
+  const expirationDate = optional(raw, "expirationDate", "number")
+  const entry: CookieEntry = {
+    name: raw.name,
+    value: optionalString(raw, "value") ?? "",
+    domain: raw.domain,
+    hostOnly: optional(raw, "hostOnly", "boolean") ?? false,
+    path: optionalString(raw, "path") ?? "/",
+    secure: optional(raw, "secure", "boolean") ?? false,
+    httpOnly: optional(raw, "httpOnly", "boolean") ?? false,
+    sameSite: optionalSameSite(raw) ?? "unspecified",
+    session: optional(raw, "session", "boolean") ?? expirationDate === undefined,
+    firstPartyDomain: optionalString(raw, "firstPartyDomain") ?? "",
+    partitionKey: parsePartitionKey(raw.partitionKey),
+  }
+  if (expirationDate !== undefined) {
+    entry.expirationDate = expirationDate
+  }
+  return entry
 }
 
 /**
@@ -143,32 +154,11 @@ export function parseCookieEntry(value: unknown): ParsedEntry {
   if (!isObject(value)) {
     return { error: "cookie must be an object." }
   }
-  const error = fieldError(value)
-  if (error) {
-    return { error }
+  try {
+    return { entry: cookieEntry(value) }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) }
   }
-  const partitionKey = parsePartitionKey(value.partitionKey)
-  if (typeof partitionKey === "string") {
-    return { error: partitionKey }
-  }
-  const expirationDate = value.expirationDate as number | undefined
-  const entry: CookieEntry = {
-    name: value.name as string,
-    value: (value.value as string | undefined) ?? "",
-    domain: value.domain as string,
-    hostOnly: (value.hostOnly as boolean | undefined) ?? false,
-    path: (value.path as string | undefined) ?? "/",
-    secure: (value.secure as boolean | undefined) ?? false,
-    httpOnly: (value.httpOnly as boolean | undefined) ?? false,
-    sameSite: (value.sameSite as SameSiteStatus | undefined) ?? "unspecified",
-    session: (value.session as boolean | undefined) ?? expirationDate === undefined,
-    firstPartyDomain: (value.firstPartyDomain as string | undefined) ?? "",
-    partitionKey,
-  }
-  if (expirationDate !== undefined) {
-    entry.expirationDate = expirationDate
-  }
-  return { entry }
 }
 
 /**
@@ -208,46 +198,41 @@ function requiredName(params: JsonObject): string {
   return optionalString(params, "name") as string
 }
 
-function optionalSameSite(params: JsonObject): SameSiteStatus | undefined {
-  const value = params.sameSite
-  if (value === undefined || value === null) {
-    return undefined
-  }
-  if (!isSameSite(value)) {
-    throw new Error(`sameSite must be one of ${SAME_SITE.join(", ")}.`)
-  }
-  return value
+// the directory of the url path with its trailing slash, what Firefox takes
+// (nsIURL.directory) when set gets no path
+function defaultPath(pathname: string): string {
+  return pathname.slice(0, pathname.lastIndexOf("/") + 1) || "/"
 }
 
 /**
  * The cookies.set details for setCookie params, without the store. Without
- * `url` the url is the origin of `domain`; every other field goes along only
- * when given, so Firefox applies its own defaults.
+ * `url` the url is the origin of `domain`. The path always goes along, the url
+ * directory unless given, so the stored identity never depends on Firefox's
+ * default; every other field only when given, so Firefox applies its own
+ * defaults. An empty `domain` is no domain: the cookie is host-only.
  */
 export function setCookieDetails(params: JsonObject): CookieSetDetails {
   const name = requiredName(params)
   const url = optionalString(params, "url")
-  const domain = optionalString(params, "domain")
+  const domain = optionalString(params, "domain") || undefined
   const secure = optional(params, "secure", "boolean")
   if (!url && !domain) {
     throw new Error("setCookie needs --url or --domain.")
   }
-  const partitionKey = parsePartitionKey(params.partitionKey)
-  if (typeof partitionKey === "string") {
-    throw new Error(partitionKey)
-  }
+  const target = url || cookieUrl({ domain: domain as string, secure })
+  const given = optionalString(params, "path")
   const fields: Partial<CookieSetDetails> = {
     domain,
-    path: optionalString(params, "path"),
+    path: given ?? (URL.canParse(target) ? defaultPath(new URL(target).pathname) : undefined),
     secure,
     httpOnly: optional(params, "httpOnly", "boolean"),
     sameSite: optionalSameSite(params),
     expirationDate: optional(params, "expirationDate", "number"),
     firstPartyDomain: optionalString(params, "firstPartyDomain"),
-    partitionKey: partitionKey ?? undefined,
+    partitionKey: parsePartitionKey(params.partitionKey) ?? undefined,
   }
   const details: CookieSetDetails = {
-    url: url || cookieUrl({ domain: domain as string, secure }),
+    url: target,
     name,
     value: optionalString(params, "value") ?? "",
   }
@@ -300,12 +285,6 @@ export function identityKey(cookie: CookieIdentity): string {
     site,
     ancestor,
   ])
-}
-
-// the directory of the url path, what Firefox takes when set gets no path
-function defaultPath(pathname: string): string {
-  const last = pathname.lastIndexOf("/")
-  return last <= 0 ? "/" : pathname.slice(0, last)
 }
 
 /** The identity key of the cookie Firefox stores for these set details. */

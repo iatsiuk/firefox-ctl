@@ -34,6 +34,8 @@ interface Harness {
 function harness(tab: Partial<Tab> = { cookieStoreId: "firefox-default" }): Harness {
   const browser = new FakeBrowser()
   const env = new FakeEnvironment({ now: 1000 })
+  // the jar expires cookies on the same clock the handlers read
+  browser.cookieJar.now = () => env.now() / 1000
   const session = new Session(browser, env)
   const deps: HandlerDeps = {
     browser,
@@ -276,7 +278,13 @@ describe("setCookie", () => {
     const result = await set({ url: "https://example.com/", name: "sid", value: "s1" })
     expect(result.store).toBe("firefox-default")
     expect(browser.cookieSets).toEqual([
-      { url: "https://example.com/", name: "sid", value: "s1", storeId: "firefox-default" },
+      {
+        url: "https://example.com/",
+        name: "sid",
+        value: "s1",
+        path: "/",
+        storeId: "firefox-default",
+      },
     ])
     expect(stored(result)).toEqual({
       name: "sid",
@@ -319,6 +327,56 @@ describe("setCookie", () => {
       storeId: "firefox-container-3",
     })
     expect(stored(byStore).storeId).toBe("firefox-container-3")
+  })
+
+  test("without --path the path is the url directory with its trailing slash", async () => {
+    const { browser, set } = harness()
+    for (const [url, path] of [
+      ["https://example.com/app/login", "/app/"],
+      ["https://example.com/app/", "/app/"],
+      ["https://example.com/app", "/"],
+    ] as const) {
+      const result = await set({ url, name: "sid", value: "1" })
+      expect(browser.cookieSets.at(-1)?.path).toBe(path)
+      expect(stored(result)).toMatchObject({ path, value: "1" })
+    }
+  })
+
+  test("an empty --domain with --url sets a host-only cookie", async () => {
+    const { browser, set } = harness()
+    const result = await set({ url: "https://example.com/", name: "sid", value: "1", domain: "" })
+    expect(browser.cookieSets[0]?.domain).toBeUndefined()
+    expect(stored(result)).toMatchObject({ domain: "example.com", hostOnly: true })
+    await expect(set({ domain: "", name: "sid", value: "1" })).rejects.toThrow(
+      "setCookie needs --url or --domain.",
+    )
+  })
+
+  test("a set that leaves an older value in place is an error", async () => {
+    const { browser, set } = harness()
+    await browser.cookieJar.write({ url: "https://example.com/", name: "sid", value: "old" })
+    browser.cookieSetHandler = () => Promise.resolve(null)
+    await expect(set({ url: "https://example.com/", name: "sid", value: "new" })).rejects.toThrow(
+      "Firefox did not store cookie sid.",
+    )
+  })
+
+  test("a set over an existing cookie returns the new value", async () => {
+    const { set } = harness()
+    await set({ url: "https://example.com/", name: "sid", value: "old" })
+    const result = await set({ url: "https://example.com/", name: "sid", value: "new" })
+    expect(stored(result).value).toBe("new")
+  })
+
+  test("an expirationDate of exactly now deletes, one just after keeps", async () => {
+    const { set } = harness()
+    const url = "https://example.com/"
+    expect(await set({ url, name: "sid", value: "1", expirationDate: 1 })).toEqual({
+      store: "firefox-default",
+      cookie: null,
+    })
+    const kept = await set({ url, name: "sid", value: "1", expirationDate: 1.001 })
+    expect(stored(kept).expirationDate).toBe(1.001)
   })
 
   test("domain without url derives the url, https when secure", async () => {
@@ -898,6 +956,41 @@ describe("importCookies", () => {
     ])
     expect(browser.cookieSets.some((details) => details.name === "old")).toBe(false)
     expect((await stored(browser)).map((cookie) => cookie.name).sort()).toEqual(["ok", "ok2"])
+  })
+
+  test("an entry that leaves an older value in place lands in failed", async () => {
+    const { browser, imp } = harness()
+    await browser.cookieJar.write({ url: "http://example.com/", name: "sid", value: "old" })
+    browser.cookieSetHandler = () => Promise.resolve(null)
+    const result = await imp({ cookies: [entry({ value: "new" })] as unknown as JsonObject[] })
+    expect(result).toMatchObject({
+      imported: 0,
+      failed: [{ name: "sid", domain: "example.com", error: "Firefox did not store the cookie." }],
+    })
+  })
+
+  test("of two entries for one cookie the later is imported, the earlier fails", async () => {
+    const { browser, imp } = harness()
+    const cookies = [entry({ value: "first" }), entry({ value: "second" })]
+    const result = await imp({ cookies: cookies as unknown as JsonObject[] })
+    expect(result).toMatchObject({
+      imported: 1,
+      failed: [{ name: "sid", domain: "example.com", error: "overwritten by a later entry." }],
+    })
+    expect((await stored(browser)).map((cookie) => cookie.value)).toEqual(["second"])
+  })
+
+  test("an expirationDate of exactly now is expired, one just after is imported", async () => {
+    const { imp } = harness()
+    const cookies = [
+      entry({ name: "now", session: false, expirationDate: 1 }),
+      entry({ name: "later", session: false, expirationDate: 1.001 }),
+    ]
+    const result = await imp({ cookies: cookies as unknown as JsonObject[] })
+    expect(result).toMatchObject({
+      imported: 1,
+      failed: [{ name: "now", domain: "example.com", error: "expired" }],
+    })
   })
 
   test("a session entry with a stale expirationDate is still imported", async () => {
