@@ -381,9 +381,35 @@ func (s *Server) forward(c *clientConn, req protocol.ClientRequest) {
 	s.log.Printf("forwarding %s (id=%s, timeout=%dms)", req.Command, id, timeoutMs)
 
 	cmd := protocol.HostCommand{ID: id, Type: protocol.TypeCommand, Command: req.Command, Params: params}
-	if err := s.out.Write(cmd); err != nil {
+
+	err := s.out.Write(cmd)
+
+	// the size check runs before any byte is written, so the framing is
+	// intact: refuse this one request and keep serving
+	var sizeErr *nativemsg.SizeError
+	if errors.As(err, &sizeErr) {
+		s.refuse(id, req.Command, sizeErr)
+
+		return
+	}
+
+	if err != nil {
 		s.fail(fmt.Errorf("send %s to extension: %w", req.Command, err))
 	}
+}
+
+// refuse answers a command whose frame exceeds the Firefox limit.
+func (s *Server) refuse(id, command string, sizeErr *nativemsg.SizeError) {
+	pending := s.take(id)
+	if pending == nil {
+		return
+	}
+
+	s.log.Printf("refusing %s (id=%s): %v", command, id, sizeErr)
+	s.reply(pending.conn, protocol.ClientResponse{
+		Error: fmt.Sprintf("%s: %s message is %d bytes, the Firefox limit is %d",
+			msgTooLarge, command, sizeErr.Size, sizeErr.Max),
+	})
 }
 
 func (s *Server) expire(id, command string, ms int) {

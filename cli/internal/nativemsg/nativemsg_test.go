@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -181,6 +182,29 @@ func TestWriterRejectsOversizePayload(t *testing.T) {
 	}
 	if buf.Len() != 0 {
 		t.Errorf("wrote %d bytes, want nothing", buf.Len())
+	}
+}
+
+func TestWriterOversizeErrorCarriesSize(t *testing.T) {
+	t.Parallel()
+
+	payload := map[string]string{"big": strings.Repeat("x", MaxOutbound)}
+	want := len(`{"big":""}`) + MaxOutbound
+
+	err := NewWriter(&bytes.Buffer{}).Write(payload)
+
+	var sizeErr *SizeError
+	if !errors.As(err, &sizeErr) {
+		t.Fatalf("err = %v, want *SizeError", err)
+	}
+
+	if sizeErr.Size != want || sizeErr.Max != MaxOutbound {
+		t.Errorf("SizeError = %+v, want Size %d, Max %d", sizeErr, want, MaxOutbound)
+	}
+
+	wantText := fmt.Sprintf("message too large: %d bytes (max %d)", want, MaxOutbound)
+	if err.Error() != wantText {
+		t.Errorf("text = %q, want %q", err.Error(), wantText)
 	}
 }
 

@@ -686,6 +686,100 @@ func TestServerRejectsOversizeRequest(t *testing.T) {
 	}
 }
 
+func TestServerRefusesCommandAboveFirefoxLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		params map[string]any
+	}{
+		{name: "params over the limit", params: map[string]any{"text": strings.Repeat("x", nativemsg.MaxOutbound)}},
+		// params alone fit, the id/type/command envelope pushes the frame over
+		{name: "envelope over the limit", params: map[string]any{"text": strings.Repeat("x", nativemsg.MaxOutbound-20)}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := start(t, options{})
+			c := f.dial()
+
+			c.sendCommand(t, "importCookies", tc.params)
+
+			resp := c.raw(t)
+			if resp["success"] != false {
+				t.Errorf("success = %v, want false", resp["success"])
+			}
+
+			wantErr := fmt.Sprintf("Message too large: importCookies message is %d bytes, the Firefox limit is %d",
+				hostFrameSize(t, "importCookies", tc.params), nativemsg.MaxOutbound)
+			if resp["error"] != wantErr {
+				t.Errorf("error = %v, want %q", resp["error"], wantErr)
+			}
+
+			// the refused request must not leave a live timer behind
+			timer := f.clock.next(t)
+			if !timer.isStopped() {
+				t.Error("request timer was not cleared for the refused command")
+			}
+
+			timer.fire()
+
+			_ = c.conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+			if _, err := c.r.ReadBytes('\n'); err == nil {
+				t.Fatal("got a late response for the refused command")
+			}
+
+			// the host keeps serving, and the refused frame never reached the
+			// extension: the first frame it reads is the next command
+			next := f.dial()
+			next.sendCommand(t, "ping", nil)
+
+			if cmd := f.ext.read(t); cmd.Command != "ping" {
+				t.Errorf("first frame to the extension = %q, want ping", cmd.Command)
+			}
+		})
+	}
+}
+
+func TestHostFrameSizeBoundary(t *testing.T) {
+	t.Parallel()
+
+	params := map[string]any{"text": strings.Repeat("x", nativemsg.MaxOutbound-20)}
+
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+
+	if len(raw) > nativemsg.MaxOutbound {
+		t.Fatalf("params are %d bytes, the boundary case needs them under %d", len(raw), nativemsg.MaxOutbound)
+	}
+
+	if size := hostFrameSize(t, "importCookies", params); size <= nativemsg.MaxOutbound {
+		t.Fatalf("frame is %d bytes, the boundary case needs it over %d", size, nativemsg.MaxOutbound)
+	}
+}
+
+// hostFrameSize is the serialised HostCommand size for a request, with an id
+// as long as the host's generated UUIDs.
+func hostFrameSize(t *testing.T, command string, params map[string]any) int {
+	t.Helper()
+
+	raw, err := json.Marshal(protocol.HostCommand{
+		ID:      newUUID(),
+		Type:    protocol.TypeCommand,
+		Command: command,
+		Params:  params,
+	})
+	if err != nil {
+		t.Fatalf("marshal host command: %v", err)
+	}
+
+	return len(raw)
+}
+
 // refuse sends a request above the cap and reads the refusal, leaving the
 // connection open with the unread rest of the line still in flight.
 func (c *client) refuse(t *testing.T) {

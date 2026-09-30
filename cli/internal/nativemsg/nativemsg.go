@@ -25,6 +25,22 @@ const (
 // ErrTooLarge reports a payload above the direction's size cap.
 var ErrTooLarge = errors.New("message too large")
 
+// SizeError is the ErrTooLarge a Writer reports: the frame was refused before
+// any byte was written, so the stream stays usable.
+type SizeError struct {
+	Size int
+	Max  int
+}
+
+func (e *SizeError) Error() string {
+	return fmt.Sprintf("%v: %d bytes (max %d)", ErrTooLarge, e.Size, e.Max)
+}
+
+// Is makes errors.Is(err, ErrTooLarge) hold for a SizeError.
+func (e *SizeError) Is(target error) bool {
+	return target == ErrTooLarge
+}
+
 // Reader decodes frames from an io.Reader. Cancellation is the caller's job:
 // close the underlying reader to unblock a pending Read.
 type Reader struct {
@@ -88,7 +104,7 @@ func (w *Writer) Write(v any) error {
 	}
 
 	if len(payload) > MaxOutbound {
-		return fmt.Errorf("%w: %d bytes (max %d)", ErrTooLarge, len(payload), MaxOutbound)
+		return &SizeError{Size: len(payload), Max: MaxOutbound}
 	}
 
 	frame := make([]byte, headerSize+len(payload))
