@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -13,6 +16,10 @@ import (
 var (
 	// errJSONNotObject rejects a --json payload that is not a JSON object.
 	errJSONNotObject = errors.New("--json must be a JSON object")
+
+	// errJSONEmpty rejects a --json @file or - that holds nothing: unlike an
+	// absent --json it names a source, so silence there is a mistake.
+	errJSONEmpty = errors.New("empty")
 
 	// errTimeoutRange rejects a --request-timeout the host would clamp away.
 	errTimeoutRange = fmt.Errorf("--request-timeout must be between %d and %d ms",
@@ -95,7 +102,12 @@ func buildParams(
 		params[flag.Name] = flagValue(values[flag.Name])
 	}
 
-	if err := mergeJSON(params, opts.jsonParams); err != nil {
+	raw, err := resolveJSON(cmd.InOrStdin(), opts.jsonParams)
+	if err != nil {
+		return nil, &usageError{err}
+	}
+
+	if err := mergeJSON(params, raw); err != nil {
 		return nil, &usageError{err}
 	}
 
@@ -121,6 +133,37 @@ func flagValue(holder any) any {
 	default:
 		return nil
 	}
+}
+
+// resolveJSON turns the --json value into JSON text, curl style: @path reads
+// the file, - reads stdin, anything else is the JSON itself.
+func resolveJSON(stdin io.Reader, value string) (string, error) {
+	var (
+		source  string
+		content []byte
+		err     error
+	)
+
+	switch {
+	case value == "-":
+		source = value
+		content, err = io.ReadAll(stdin)
+	case strings.HasPrefix(value, "@"):
+		source = strings.TrimPrefix(value, "@")
+		content, err = os.ReadFile(source)
+	default:
+		return value, nil
+	}
+
+	if err == nil && strings.TrimSpace(string(content)) == "" {
+		err = errJSONEmpty
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("read --json %s: %w", source, err)
+	}
+
+	return string(content), nil
 }
 
 // mergeJSON overlays raw onto params. It wins over typed flags and is the only

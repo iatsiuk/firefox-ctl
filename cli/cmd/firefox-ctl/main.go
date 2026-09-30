@@ -87,7 +87,7 @@ func buildRootCmd(dispatch dispatchFunc) *cobra.Command {
 		"unix socket path (default $XDG_RUNTIME_DIR/firefox-ctl.sock or ~/.firefox-ctl/firefox-ctl.sock)")
 
 	rootCmd.PersistentFlags().StringVar(&opts.jsonParams, "json", "",
-		"extra params as a JSON object, merged over the typed flags")
+		"extra params as a JSON object, merged over the typed flags; @file reads it from a file, - from stdin")
 	rootCmd.PersistentFlags().IntVar(&opts.requestTimeout, "request-timeout", protocol.DefaultTimeoutMs,
 		fmt.Sprintf("per-request timeout in ms (%d-%d)", protocol.MinTimeoutMs, protocol.MaxTimeoutMs))
 

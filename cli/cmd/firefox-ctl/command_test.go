@@ -3,7 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -32,11 +37,19 @@ func (c *capture) dispatch() dispatchFunc {
 func run(t *testing.T, args ...string) (*capture, string, error) {
 	t.Helper()
 
+	return runWithIn(t, strings.NewReader(""), args...)
+}
+
+// runWithIn is run with a chosen stdin, for --json -.
+func runWithIn(t *testing.T, stdin io.Reader, args ...string) (*capture, string, error) {
+	t.Helper()
+
 	rec := &capture{}
 	buf := &bytes.Buffer{}
 	cmd := buildRootCmd(rec.dispatch())
 	cmd.SetOut(buf)
 	cmd.SetErr(buf)
+	cmd.SetIn(stdin)
 	cmd.SetArgs(args)
 
 	return rec, buf.String(), cmd.Execute()
@@ -260,6 +273,188 @@ func TestJSONFlag(t *testing.T) {
 			assertParams(t, rec.params, tt.want)
 		})
 	}
+}
+
+// failingReader stands in for a stdin that breaks mid-read.
+type failingReader struct{}
+
+var errStdinBroken = errors.New("stdin broken")
+
+func (failingReader) Read([]byte) (int, error) { return 0, errStdinBroken }
+
+func TestJSONFlagSources(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		files   map[string]string
+		stdin   io.Reader
+		args    []string
+		want    map[string]any
+		wantErr string
+	}{
+		{
+			name:  "object from file",
+			files: map[string]string{"p.json": `{"expression":"1+1"}`},
+			args:  []string{"evaluate", "--json", "@{dir}/p.json"},
+			want:  map[string]any{"expression": "1+1"},
+		},
+		{
+			name:  "object from stdin",
+			stdin: strings.NewReader(`{"expression":"2+2"}`),
+			args:  []string{"evaluate", "--json", "-"},
+			want:  map[string]any{"expression": "2+2"},
+		},
+		{
+			name:  "file wins over typed flags",
+			files: map[string]string{"p.json": `{"selector":"#b"}`},
+			args:  []string{"getContent", "--selector", "#a", "--json", "@{dir}/p.json"},
+			want:  map[string]any{"selector": "#b"},
+		},
+		{
+			name:  "stdin wins over typed flags",
+			stdin: strings.NewReader(`{"selector":"#b"}`),
+			args:  []string{"getContent", "--selector", "#a", "--json", "-"},
+			want:  map[string]any{"selector": "#b"},
+		},
+		{
+			name:  "typed flags the file leaves out stay",
+			files: map[string]string{"p.json": `{"text":"hi"}`},
+			args:  []string{"type", "--selector", "#a", "--json", "@{dir}/p.json"},
+			want:  map[string]any{"selector": "#a", "text": "hi"},
+		},
+		{
+			name:    "missing file",
+			args:    []string{"ping", "--json", "@{dir}/absent.json"},
+			wantErr: "read --json {dir}/absent.json",
+		},
+		{
+			name:    "unreadable path",
+			files:   map[string]string{"sub/x.json": `{}`},
+			args:    []string{"ping", "--json", "@{dir}/sub"},
+			wantErr: "read --json {dir}/sub",
+		},
+		{
+			name:    "stdin read error",
+			stdin:   failingReader{},
+			args:    []string{"ping", "--json", "-"},
+			wantErr: "read --json -: stdin broken",
+		},
+		{
+			name:    "file with invalid JSON",
+			files:   map[string]string{"p.json": `{oops`},
+			args:    []string{"ping", "--json", "@{dir}/p.json"},
+			wantErr: "parse --json",
+		},
+		{
+			name:    "file with a non-object",
+			files:   map[string]string{"p.json": `[1,2]`},
+			args:    []string{"ping", "--json", "@{dir}/p.json"},
+			wantErr: "--json must be a JSON object",
+		},
+		{
+			name:    "empty file",
+			files:   map[string]string{"p.json": ""},
+			args:    []string{"ping", "--json", "@{dir}/p.json"},
+			wantErr: "read --json {dir}/p.json: empty",
+		},
+		{
+			name:    "whitespace-only file",
+			files:   map[string]string{"p.json": " \n"},
+			args:    []string{"ping", "--json", "@{dir}/p.json"},
+			wantErr: "read --json {dir}/p.json: empty",
+		},
+		{
+			name:    "empty stdin",
+			stdin:   strings.NewReader(""),
+			args:    []string{"ping", "--json", "-"},
+			wantErr: "read --json -: empty",
+		},
+		{
+			name:    "bare @",
+			args:    []string{"ping", "--json", "@"},
+			wantErr: "read --json : ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			writeFiles(t, dir, tt.files)
+
+			args := make([]string, len(tt.args))
+			for i, arg := range tt.args {
+				args[i] = strings.ReplaceAll(arg, "{dir}", dir)
+			}
+
+			stdin := tt.stdin
+			if stdin == nil {
+				stdin = strings.NewReader("")
+			}
+
+			rec, out, err := runWithIn(t, stdin, args...)
+			if tt.wantErr != "" {
+				assertUsageError(t, err, strings.ReplaceAll(tt.wantErr, "{dir}", dir), out)
+
+				if rec.calls != 0 {
+					t.Errorf("dispatch called %d times on a rejected --json", rec.calls)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("execute: %v (%s)", err, out)
+			}
+
+			assertParams(t, rec.params, tt.want)
+		})
+	}
+}
+
+func writeFiles(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+}
+
+func assertUsageError(t *testing.T, err error, wantText, out string) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatalf("expected error containing %q, got none (%s)", wantText, out)
+	}
+
+	var ue *usageError
+	if !errors.As(err, &ue) {
+		t.Errorf("error %v is not a usage error", err)
+	}
+
+	if !strings.Contains(err.Error(), wantText) {
+		t.Errorf("error %q, want it to contain %q", err, wantText)
+	}
+}
+
+func TestJSONFlagAbsentIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	rec, out, err := runWithIn(t, failingReader{}, "ping")
+	if err != nil {
+		t.Fatalf("execute: %v (%s)", err, out)
+	}
+
+	assertParams(t, rec.params, map[string]any{})
 }
 
 func TestRequestTimeoutFlag(t *testing.T) {
