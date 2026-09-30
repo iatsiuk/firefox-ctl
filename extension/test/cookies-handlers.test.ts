@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test"
 
 import { AttachedTabs } from "../src/attached"
-import type { Cookie, Tab } from "../src/browser"
+import type { Cookie, CookieSetDetails, Tab } from "../src/browser"
 import { CaptureLocks } from "../src/capture-locks"
 import type { HandlerDeps } from "../src/dispatch"
 import { FrameRegistry } from "../src/frames"
-import { exportCookies, resolveCookieStore, setCookie } from "../src/handlers/cookies"
+import {
+  deleteCookies,
+  exportCookies,
+  resolveCookieStore,
+  setCookie,
+} from "../src/handlers/cookies"
 import { NetworkTracker } from "../src/network"
 import type { JsonObject } from "../src/protocol"
 import { commandContext } from "../src/protocol"
@@ -19,6 +24,7 @@ interface Harness {
   session: Session
   run(params?: JsonObject): Promise<JsonObject>
   set(params: JsonObject): Promise<JsonObject>
+  del(params: JsonObject): Promise<JsonObject>
 }
 
 /** A managed window whose active tab 1 is in `store`, plus a plain tab 2. */
@@ -69,6 +75,7 @@ function harness(tab: Partial<Tab> = { cookieStoreId: "firefox-default" }): Harn
     session,
     run: async (params = {}) => (await exportCookies(params, deps)) as JsonObject,
     set: async (params) => (await setCookie(params, deps)) as JsonObject,
+    del: async (params) => (await deleteCookies(params, deps)) as JsonObject,
   }
 }
 
@@ -477,5 +484,243 @@ describe("setCookie", () => {
     const { set } = harness()
     const result = await set({ url: "https://example.com/", name: "sid", value: "1", path: "/app" })
     expect(stored(result)).toMatchObject({ path: "/app", value: "1" })
+  })
+})
+
+describe("deleteCookies", () => {
+  const future = 4_000_000_000
+
+  async function seed(browser: FakeBrowser): Promise<void> {
+    const jar = browser.cookieJar
+    await jar.write({ url: "https://example.com/", name: "sid", value: "1", domain: "example.com" })
+    await jar.write({ url: "https://example.com/", name: "pref", value: "2", path: "/app" })
+    await jar.write({
+      url: "https://example.com/",
+      name: "part",
+      value: "3",
+      secure: true,
+      partitionKey: { topLevelSite: "https://top.test", hasCrossSiteAncestor: true },
+    })
+    await jar.write({
+      url: "https://example.com/",
+      name: "fpi",
+      value: "4",
+      firstPartyDomain: "example.com",
+      expirationDate: future,
+    })
+    await jar.write({ url: "https://other.test/", name: "o", value: "5" })
+    await jar.write({
+      url: "https://example.com/",
+      name: "elsewhere",
+      value: "6",
+      storeId: "firefox-container-2",
+    })
+  }
+
+  async function left(browser: FakeBrowser, storeId = "firefox-default"): Promise<string[]> {
+    const found = await browser.cookieJar.getAll({
+      storeId,
+      partitionKey: {},
+      firstPartyDomain: null,
+    })
+    return found.map((cookie) => `${cookie.domain} ${cookie.name}`).sort()
+  }
+
+  test("removes every match in the resolved store, partitioned and first-party ones too", async () => {
+    const { browser, del } = harness()
+    await seed(browser)
+    const result = await del({ domain: "example.com" })
+    expect(result).toEqual({
+      store: "firefox-default",
+      deleted: 4,
+      cookies: [
+        { name: "sid", domain: ".example.com", path: "/" },
+        { name: "fpi", domain: "example.com", path: "/" },
+        { name: "part", domain: "example.com", path: "/" },
+        { name: "pref", domain: "example.com", path: "/app" },
+      ],
+      failed: [],
+    })
+    expect(await left(browser)).toEqual(["other.test o"])
+    expect(await left(browser, "firefox-container-2")).toEqual(["example.com elsewhere"])
+  })
+
+  test("queries the filter, expires each match by identity, then re-queries", async () => {
+    const { browser, del } = harness()
+    await seed(browser)
+    await del({ url: "https://example.com/app/x", name: "pref" })
+    const query = {
+      url: "https://example.com/app/x",
+      name: "pref",
+      storeId: "firefox-default",
+      partitionKey: {},
+      firstPartyDomain: null,
+    }
+    expect(browser.cookieQueries).toEqual([query, query])
+    expect(browser.cookieSets.at(-1)).toEqual({
+      url: "http://example.com/",
+      name: "pref",
+      value: "",
+      path: "/app",
+      secure: false,
+      httpOnly: false,
+      sameSite: "unspecified",
+      expirationDate: 0,
+      storeId: "firefox-default",
+      firstPartyDomain: "",
+    })
+  })
+
+  test("all empties the store and leaves other stores alone", async () => {
+    const { browser, del } = harness()
+    await seed(browser)
+    const result = await del({ all: true })
+    expect(result.deleted).toBe(5)
+    expect(result.failed).toEqual([])
+    expect(await left(browser)).toEqual([])
+    expect(await left(browser, "firefox-container-2")).toEqual(["example.com elsewhere"])
+  })
+
+  test("works on the store of another tab or an explicit storeId", async () => {
+    const { browser, del } = harness()
+    await seed(browser)
+    const byTab = await del({ name: "elsewhere", tabId: 2 })
+    expect(byTab.store).toBe("firefox-container-2")
+    expect(byTab.deleted).toBe(1)
+    expect(await left(browser, "firefox-container-2")).toEqual([])
+    const byStore = await del({ all: true, storeId: "firefox-container-2" })
+    expect(byStore).toMatchObject({ store: "firefox-container-2", deleted: 0 })
+    expect((await left(browser)).length).toBe(5)
+  })
+
+  test("a host-only cookie goes, the parent-domain one with the same name stays", async () => {
+    const { browser, del } = harness()
+    const jar = browser.cookieJar
+    await jar.write({ url: "https://example.com/", name: "sid", value: "p", domain: "example.com" })
+    await jar.write({ url: "https://sub.example.com/", name: "sid", value: "c" })
+    const result = await del({ domain: "sub.example.com" })
+    expect(result.cookies).toEqual([{ name: "sid", domain: "sub.example.com", path: "/" }])
+    expect(await left(browser)).toEqual([".example.com sid"])
+  })
+
+  test("the parent-domain collision holds under firstPartyDomain and partitionKey", async () => {
+    const origins: Partial<CookieSetDetails>[] = [
+      { firstPartyDomain: "example.com" },
+      { partitionKey: { topLevelSite: "https://top.test", hasCrossSiteAncestor: false } },
+      { partitionKey: { topLevelSite: "https://top.test", hasCrossSiteAncestor: true } },
+    ]
+    for (const origin of origins) {
+      const { browser, del } = harness()
+      const jar = browser.cookieJar
+      const base = { name: "sid", secure: true, ...origin }
+      await jar.write({ ...base, url: "https://example.com/", value: "p", domain: "example.com" })
+      await jar.write({ ...base, url: "https://sub.example.com/", value: "c" })
+      await jar.write({
+        url: "https://example.com/",
+        name: "sid",
+        value: "plain",
+        domain: "example.com",
+      })
+      const result = await del({ domain: "sub.example.com" })
+      expect(result.cookies).toEqual([{ name: "sid", domain: "sub.example.com", path: "/" }])
+      expect(browser.cookieSets.at(-1)).toMatchObject(origin)
+      const kept = await jar.getAll({ partitionKey: {}, firstPartyDomain: null })
+      expect(kept.map((cookie) => cookie.value).sort()).toEqual(["p", "plain"])
+    }
+  })
+
+  test("an unnamed, an insecure SameSite=None and a secure httpOnly __Host- cookie are deleted", async () => {
+    const { browser, del } = harness()
+    const jar = browser.cookieJar
+    await jar.write({ url: "https://example.com/", name: "", value: "anon" })
+    jar.insert({
+      name: "legacy",
+      value: "1",
+      domain: "example.com",
+      hostOnly: true,
+      path: "/",
+      secure: false,
+      httpOnly: false,
+      sameSite: "no_restriction",
+      session: true,
+      storeId: "firefox-default",
+      firstPartyDomain: "",
+      partitionKey: null,
+    })
+    await jar.write({
+      url: "https://example.com/",
+      name: "__Host-sid",
+      value: "s",
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "strict",
+    })
+    const result = await del({ domain: "example.com" })
+    expect(result.deleted).toBe(3)
+    expect(result.failed).toEqual([])
+    expect(await left(browser)).toEqual([])
+    const unnamed = browser.cookieSets.find((details) => details.name === "")
+    expect(unnamed?.value).toBe("x")
+    const host = browser.cookieSets.find((details) => details.name === "__Host-sid")
+    expect(host).toMatchObject({ url: "https://example.com/", secure: true, httpOnly: true })
+    expect("domain" in (host ?? {})).toBe(false)
+  })
+
+  test("without a filter or all nothing is removed", async () => {
+    const { browser, del } = harness()
+    await seed(browser)
+    for (const params of [{}, { all: false }, { tabId: 2 }] as JsonObject[]) {
+      await expect(del(params)).rejects.toThrow(
+        "deleteCookies needs --url, --domain, --name or --all.",
+      )
+    }
+    expect(browser.cookieQueries).toEqual([])
+    expect(browser.cookieSets).toEqual([])
+  })
+
+  test("malformed params are refused before Firefox is asked", async () => {
+    const { browser, del } = harness()
+    await expect(del({ all: "yes" })).rejects.toThrow("all must be a boolean.")
+    await expect(del({ domain: 7 })).rejects.toThrow("domain must be a string.")
+    expect(browser.cookieQueries).toEqual([])
+  })
+
+  test("a set rejection lands in failed and the rest are still deleted", async () => {
+    const { browser, del } = harness()
+    await seed(browser)
+    browser.cookieSetHandler = (details) =>
+      details.name === "sid" ? Promise.reject(new Error("boom")) : browser.writeCookie(details)
+    const result = await del({ domain: "example.com" })
+    expect(result.deleted).toBe(3)
+    expect(result.failed).toEqual([
+      { name: "sid", domain: ".example.com", path: "/", error: "boom" },
+    ])
+    expect(await left(browser)).toEqual([".example.com sid", "other.test o"])
+  })
+
+  test("a cookie still present on the re-query lands in failed even when set resolved", async () => {
+    const { browser, del } = harness()
+    await seed(browser)
+    browser.cookieSetHandler = (details) =>
+      details.name === "pref" ? Promise.resolve(null) : browser.writeCookie(details)
+    const result = await del({ domain: "example.com" })
+    expect(result.deleted).toBe(3)
+    expect(result.failed).toEqual([
+      {
+        name: "pref",
+        domain: "example.com",
+        path: "/app",
+        error: "Firefox kept the cookie.",
+      },
+    ])
+  })
+
+  test("a private store without incognito access surfaces Firefox's error", async () => {
+    const { browser, del } = harness({ cookieStoreId: "firefox-private", incognito: true })
+    browser.allowedIncognitoAccess = false
+    await expect(del({ all: true })).rejects.toThrow(
+      "Extension disallowed access to the private cookies storeId.",
+    )
   })
 })

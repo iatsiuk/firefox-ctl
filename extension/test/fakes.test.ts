@@ -932,6 +932,37 @@ describe("FakeBrowser.cookies", () => {
     expect(names(await browser.cookies.getAll({}))).toEqual(["good"])
   })
 
+  test("insert stores a cookie as is, one Firefox would no longer accept", async () => {
+    const browser = new FakeBrowser()
+    const legacy = {
+      name: "old",
+      value: "1",
+      domain: "example.com",
+      hostOnly: true,
+      path: "/",
+      secure: false,
+      httpOnly: false,
+      sameSite: "no_restriction" as const,
+      session: true,
+      storeId: "firefox-container-1",
+      firstPartyDomain: "",
+      partitionKey: null,
+    }
+    browser.cookieJar.insert(legacy)
+    legacy.value = "changed"
+
+    const [found] = await browser.cookies.getAll({ storeId: "firefox-container-1" })
+    expect(found).toEqual({ ...legacy, value: "1" })
+    await browser.cookies.set({
+      url: "http://example.com/",
+      name: "old",
+      value: "",
+      expirationDate: 0,
+      storeId: "firefox-container-1",
+    })
+    expect(await browser.cookies.getAll({ storeId: "firefox-container-1" })).toEqual([])
+  })
+
   test("tabs carry the cookie store of their window", async () => {
     const browser = new FakeBrowser()
     const normal = await browser.windows.create({})

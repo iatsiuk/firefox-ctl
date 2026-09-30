@@ -791,7 +791,7 @@ describe("the whole command table", () => {
     }
   })
 
-  test("all 35 commands answer a host frame with their declared flags", async () => {
+  test("all 36 commands answer a host frame with their declared flags", async () => {
     const browser = userBrowser()
     const { port } = session(browser)
     contentTab(browser)
@@ -888,6 +888,8 @@ describe("the whole command table", () => {
           tabId,
         },
       ],
+      ["deleteCookies", { url: "https://mozilla.org/", domain: "mozilla.org", name: "sid", tabId }],
+      ["deleteCookies", { all: true, storeId: "firefox-default" }],
       ["closeTab", { tabId }],
       ["closeWindow", {}],
     ]

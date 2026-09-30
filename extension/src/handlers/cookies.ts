@@ -2,8 +2,10 @@
 // browser.cookies and touch no session state; the pure logic lives in
 // ../cookies.
 
+import type { Cookie } from "../browser"
 import {
   cookieFilter,
+  expireDetails,
   identityKey,
   requestedIdentity,
   setCookieDetails,
@@ -79,4 +81,58 @@ export const setCookie: Handler = async (params, deps) => {
     return { store, cookie: null }
   }
   throw new Error(`Firefox did not store cookie ${name}.`)
+}
+
+function deleteAll(params: JsonObject): boolean {
+  const all = params.all
+  if (all === undefined || all === null) {
+    return false
+  }
+  if (typeof all !== "boolean") {
+    throw new Error("all must be a boolean.")
+  }
+  return all
+}
+
+function cookieRef(cookie: Cookie): { name: string; domain: string; path: string } {
+  return { name: cookie.name, domain: cookie.domain, path: cookie.path }
+}
+
+/**
+ * Removes every cookie matching the filter. cookies.remove picks among the
+ * cookies of a url by path length and age, so it can hit a parent-domain
+ * cookie outside the filter; each match is overwritten by an expired cookie
+ * of its exact identity instead, and a re-query tells what is really gone.
+ */
+export const deleteCookies: Handler = async (params, deps) => {
+  const filter = cookieFilter(params)
+  const all = deleteAll(params)
+  const filtered =
+    filter.url !== undefined || filter.domain !== undefined || filter.name !== undefined
+  if (!all && !filtered) {
+    throw new Error("deleteCookies needs --url, --domain, --name or --all.")
+  }
+  const store = await resolveCookieStore(deps, params)
+  const query = { ...filter, storeId: store }
+  const targets = sortCookies(await deps.browser.cookies.getAll(query))
+  const errors = new Map<string, string>()
+  for (const cookie of targets) {
+    try {
+      await deps.browser.cookies.set(expireDetails(cookie, store))
+    } catch (error) {
+      errors.set(identityKey(cookie), errorText(error))
+    }
+  }
+  const remaining = new Set((await deps.browser.cookies.getAll(query)).map(identityKey))
+  const cookies = []
+  const failed = []
+  for (const cookie of targets) {
+    const key = identityKey(cookie)
+    if (remaining.has(key)) {
+      failed.push({ ...cookieRef(cookie), error: errors.get(key) ?? "Firefox kept the cookie." })
+    } else {
+      cookies.push(cookieRef(cookie))
+    }
+  }
+  return { store, deleted: cookies.length, cookies, failed }
 }

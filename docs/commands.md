@@ -434,6 +434,7 @@ ones also accept `frameId`; see Child frames.
 |---|---|---|
 | exportCookies | [url], [domain], [name], [storeId], [tabId] | `{store, total, cookies}`, every `cookies.Cookie` field, sorted by domain, path, name; partitioned and first-party-isolated cookies included |
 | setCookie | name, [value], [url] or [domain], [path], [secure], [httpOnly], [sameSite], [expirationDate], [storeId], [tabId]; `firstPartyDomain`, `partitionKey` via `--json` | `{store, cookie}`, the cookie as Firefox stored it, read back by its identity; `cookie` is `null` when `expirationDate` is already past, which deletes the cookie |
+| deleteCookies | [url], [domain], [name] or [all], [storeId], [tabId] | `{store, deleted, cookies: [{name, domain, path}], failed: [{name, domain, path, error}]}`; each match is overwritten by an expired cookie of its exact identity, so a parent-domain cookie with the same name survives; refuses to run without a filter or `--all` |
 
 Cookie commands work on one cookie store, reported as `store` in the result. Without
 `--storeId` it is the store of the target tab (`--tabId`, else the session active tab), so

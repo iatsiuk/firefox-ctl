@@ -338,6 +338,16 @@ export class FakeCookieJar implements Cookies {
     return Promise.resolve(this.lookup(url, cookie))
   }
 
+  // stores a cookie without validation, like a legacy cookie Firefox kept
+  // from before a rule it now enforces on set
+  insert(cookie: Cookie): void {
+    const cookies = this.storeCookies(cookie.storeId).filter(
+      (stored) => !sameIdentity(stored.cookie, cookie),
+    )
+    cookies.push({ cookie: this.copy(cookie), created: this.created++ })
+    this.stores.set(cookie.storeId, cookies)
+  }
+
   private build(url: URL, details: CookieSetDetails, storeId: string): Cookie {
     const cookie: Cookie = {
       name: details.name ?? "",

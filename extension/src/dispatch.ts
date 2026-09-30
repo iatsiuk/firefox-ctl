@@ -7,7 +7,7 @@ import { CaptureLocks } from "./capture-locks"
 import type { Environment } from "./env"
 import { FrameRegistry } from "./frames"
 import { attachTab, detachTab, listAllTabs } from "./handlers/attached"
-import { exportCookies, setCookie } from "./handlers/cookies"
+import { deleteCookies, exportCookies, setCookie } from "./handlers/cookies"
 import { getNetworkRequests } from "./handlers/devtools"
 import { PAGE_COMMANDS, pageHandlers } from "./handlers/dom"
 import { listFrames, unwatchFrames, watchFrames } from "./handlers/frames"
@@ -392,6 +392,7 @@ export function createDispatcher(browser: Browser, env: Environment): Dispatcher
   dispatcher.register("listFrames", listFrames)
   dispatcher.register("exportCookies", exportCookies)
   dispatcher.register("setCookie", setCookie)
+  dispatcher.register("deleteCookies", deleteCookies)
   for (const command of PAGE_COMMANDS) {
     dispatcher.register(command, pageHandlers[command])
   }

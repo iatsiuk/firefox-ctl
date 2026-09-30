@@ -176,6 +176,12 @@ var Commands = []Spec{
 		Flag{Name: "sameSite", Kind: KindString, Usage: "no_restriction, lax, strict or unspecified"},
 		Flag{Name: "expirationDate", Kind: KindFloat, Usage: "expiry in seconds since the epoch, omit for a session cookie"},
 	)},
+	{Name: "deleteCookies", Flags: cookieStore(
+		Flag{Name: "url", Kind: KindString, Usage: "only cookies a request to this url would send"},
+		Flag{Name: "domain", Kind: KindString, Usage: "only cookies of this domain and its subdomains"},
+		Flag{Name: "name", Kind: KindString, Usage: "only cookies with this name"},
+		Flag{Name: "all", Kind: KindBool, Usage: "every cookie of the store, required without a filter"},
+	)},
 }
 
 // page appends the tab and window selectors every page command accepts.

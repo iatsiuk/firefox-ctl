@@ -248,5 +248,16 @@
       { "name": "storeId", "kind": "string" },
       { "name": "tabId", "kind": "int" }
     ]
+  },
+  {
+    "name": "deleteCookies",
+    "flags": [
+      { "name": "url", "kind": "string" },
+      { "name": "domain", "kind": "string" },
+      { "name": "name", "kind": "string" },
+      { "name": "all", "kind": "bool" },
+      { "name": "storeId", "kind": "string" },
+      { "name": "tabId", "kind": "int" }
+    ]
   }
 ]

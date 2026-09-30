@@ -69,8 +69,8 @@ describe("commands.json", () => {
     expect(ours).toBe(go)
   })
 
-  test("COMMANDS lists all 35 command names in fixture order", () => {
-    expect(COMMANDS.length).toBe(35)
+  test("COMMANDS lists all 36 command names in fixture order", () => {
+    expect(COMMANDS.length).toBe(36)
     expect(COMMANDS[0]).toBe("ping")
     expect(COMMANDS[1]).toBe("version")
     expect(COMMANDS).toContain("getNetworkRequests")
@@ -115,6 +115,7 @@ describe("commands.json", () => {
       listFrames: true,
       exportCookies: true,
       setCookie: true,
+      deleteCookies: true,
     }
     expect(Object.keys(union).sort()).toEqual([...COMMANDS].sort())
   })
