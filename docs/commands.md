@@ -428,6 +428,18 @@ arrive, and a `screenshot` issued right after one can capture a page that is sti
 All page commands additionally accept `tabId` and `windowId`, and the twelve document-local
 ones also accept `frameId`; see Child frames.
 
+## Cookies
+
+| Command | Params | Notes |
+|---|---|---|
+| exportCookies | [url], [domain], [name], [storeId], [tabId] | `{store, total, cookies}`, every `cookies.Cookie` field, sorted by domain, path, name; partitioned and first-party-isolated cookies included |
+
+Cookie commands work on one cookie store, reported as `store` in the result. Without
+`--storeId` it is the store of the target tab (`--tabId`, else the session active tab), so
+the private managed window uses `firefox-private` and a container tab its container store;
+`--storeId` needs no session. `firefox-private` is reachable only with "Run in Private
+Windows".
+
 ## Dropped
 
 - MCP server and its tool wrappers

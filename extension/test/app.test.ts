@@ -92,7 +92,7 @@ describe("start", () => {
         success: true,
         result: {
           extension: "0.4.2",
-          features: ["sessions", "dom", "devtools", "frames"],
+          features: ["sessions", "dom", "devtools", "frames", "cookies"],
         },
       },
     ])
@@ -405,7 +405,7 @@ describe("devtools and screenshot over host frames", () => {
     expect(browser.captures).toEqual([{ tabId, options: { format: "jpeg", quality: 60 } }])
   })
 
-  test("version announces the devtools and frames features", async () => {
+  test("version announces the devtools, frames and cookies features", async () => {
     const { port } = await managed()
 
     expect(result(await run(port, "v", "version")).features).toEqual([
@@ -413,6 +413,7 @@ describe("devtools and screenshot over host frames", () => {
       "dom",
       "devtools",
       "frames",
+      "cookies",
     ])
   })
 })

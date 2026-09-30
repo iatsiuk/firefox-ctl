@@ -23,7 +23,7 @@ var allowedCommands = []string{
 	"getLoopState", "incrementLoopIteration", "requestTabSpace",
 	"grantTabSpace", "getSlotRequests", "cleanupOrphanedTabs",
 	"setPrivateMode", "goodbye", "handleConsent", "getWindowMode",
-	"watchFrames", "unwatchFrames", "listFrames",
+	"watchFrames", "unwatchFrames", "listFrames", "exportCookies",
 }
 
 var droppedCommands = []string{

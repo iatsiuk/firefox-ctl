@@ -85,6 +85,7 @@ export type CommandName =
   | "watchFrames"
   | "unwatchFrames"
   | "listFrames"
+  | "exportCookies"
 
 export const COMMANDS: readonly CommandName[] = commandTable.map((spec) => spec.name as CommandName)
 

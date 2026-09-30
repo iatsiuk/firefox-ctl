@@ -30,7 +30,8 @@
     "<all_urls>",
     "webRequest",
     "webNavigation",
-    "storage"
+    "storage",
+    "cookies"
   ],
   "background": {
     "scripts": ["dist/background.js"],

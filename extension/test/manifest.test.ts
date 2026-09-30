@@ -62,6 +62,7 @@ describe("manifest.json", () => {
     expect([...permissions].sort()).toEqual(
       [
         "<all_urls>",
+        "cookies",
         "nativeMessaging",
         "storage",
         "tabGroups",

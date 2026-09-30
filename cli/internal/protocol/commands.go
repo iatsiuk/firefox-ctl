@@ -160,6 +160,11 @@ var Commands = []Spec{
 		{Name: "timeout", Kind: KindInt, Default: 0, Usage: "wait up to this many ms for the first matching child frame"},
 		tabID("tab to list, defaults to the session active tab"),
 	}},
+	{Name: "exportCookies", Flags: cookieStore(
+		Flag{Name: "url", Kind: KindString, Usage: "only cookies a request to this url would send"},
+		Flag{Name: "domain", Kind: KindString, Usage: "only cookies of this domain and its subdomains"},
+		Flag{Name: "name", Kind: KindString, Usage: "only cookies with this name"},
+	)},
 }
 
 // page appends the tab and window selectors every page command accepts.
@@ -175,6 +180,18 @@ func page(flags ...Flag) []Flag {
 // the whole tab and keep the plain page flags.
 func framePage(flags ...Flag) []Flag {
 	return append(page(flags...), frameID())
+}
+
+// cookieStore appends the store selectors every cookie command accepts: an
+// explicit store, or the store of a tab.
+func cookieStore(flags ...Flag) []Flag {
+	out := make([]Flag, 0, len(flags)+2)
+	out = append(out, flags...)
+
+	return append(out,
+		Flag{Name: "storeId", Kind: KindString, Usage: "cookie store, for example firefox-private; defaults to the target tab's store"},
+		tabID("tab whose cookie store is used, defaults to the session active tab"),
+	)
 }
 
 func tabID(usage string) Flag {

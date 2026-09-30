@@ -222,5 +222,15 @@
       { "name": "timeout", "kind": "int", "default": 0 },
       { "name": "tabId", "kind": "int" }
     ]
+  },
+  {
+    "name": "exportCookies",
+    "flags": [
+      { "name": "url", "kind": "string" },
+      { "name": "domain", "kind": "string" },
+      { "name": "name", "kind": "string" },
+      { "name": "storeId", "kind": "string" },
+      { "name": "tabId", "kind": "int" }
+    ]
   }
 ]

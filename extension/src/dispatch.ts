@@ -7,6 +7,7 @@ import { CaptureLocks } from "./capture-locks"
 import type { Environment } from "./env"
 import { FrameRegistry } from "./frames"
 import { attachTab, detachTab, listAllTabs } from "./handlers/attached"
+import { exportCookies } from "./handlers/cookies"
 import { getNetworkRequests } from "./handlers/devtools"
 import { PAGE_COMMANDS, pageHandlers } from "./handlers/dom"
 import { listFrames, unwatchFrames, watchFrames } from "./handlers/frames"
@@ -353,10 +354,10 @@ export const ping: Handler = (_params, { env }) => ({ pong: true, timestamp: env
 export const version: Handler = (_params, { browser }) => ({
   extension: browser.runtime.getManifest().version,
   // grows as later plans add capabilities
-  features: ["sessions", "dom", "devtools", "frames"],
+  features: ["sessions", "dom", "devtools", "frames", "cookies"],
 })
 
-/** Every command of the session, window, tab and page plans, plus the two probes. */
+/** Every command of the session, window, tab, page and cookie plans, plus the two probes. */
 export function createDispatcher(browser: Browser, env: Environment): Dispatcher {
   const dispatcher = new Dispatcher({
     browser,
@@ -389,6 +390,7 @@ export function createDispatcher(browser: Browser, env: Environment): Dispatcher
   dispatcher.register("watchFrames", watchFrames)
   dispatcher.register("unwatchFrames", unwatchFrames)
   dispatcher.register("listFrames", listFrames)
+  dispatcher.register("exportCookies", exportCookies)
   for (const command of PAGE_COMMANDS) {
     dispatcher.register(command, pageHandlers[command])
   }
