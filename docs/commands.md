@@ -435,7 +435,7 @@ ones also accept `frameId`; see Child frames.
 | exportCookies | [url], [domain], [name], [storeId], [tabId] | `{store, total, cookies}`, every `cookies.Cookie` field, sorted by domain, path, name; partitioned and first-party-isolated cookies included |
 | setCookie | name, [value], [url] or [domain], [path], [secure], [httpOnly], [sameSite], [expirationDate], [storeId], [tabId]; `firstPartyDomain`, `partitionKey` via `--json` | `{store, cookie}`, the cookie as Firefox stored it, read back by its identity; `cookie` is `null` when `expirationDate` is already past, which deletes the cookie |
 | deleteCookies | [url], [domain], [name] or [all], [storeId], [tabId] | `{store, deleted, cookies: [{name, domain, path}], failed: [{name, domain, path, error}]}`; each match is overwritten by an expired cookie of its exact identity, so a parent-domain cookie with the same name survives; refuses to run without a filter or `--all` |
-| importCookies | cookies (via `--json`), [storeId], [tabId] | `{store, imported, failed: [{name, domain, error}]}`; takes an `exportCookies` result as is and writes it into the target store, ignoring `store`, `total` and each entry's `storeId`; every cookie is checked by one re-query of the store; a malformed, rejected, already expired or unstored entry lands in `failed` and the rest are imported |
+| importCookies | cookies (via `--json`), [storeId], [tabId] | `{store, imported, failed: [{name, domain, error}]}`; takes an `exportCookies` result as is and writes it into the target store, ignoring `store`, `total` and each entry's `storeId`; every cookie is checked by one re-query of the store, plus one per `topLevelSite` for the site Firefox stored it under; a malformed, rejected, already expired or unstored entry lands in `failed` and the rest are imported |
 
 Cookie commands work on one cookie store, reported as `store` in the result. Without
 `--storeId` it is the store of the target tab (`--tabId`, else the session active tab), so
@@ -453,8 +453,11 @@ subdomains. Both commands always query with `partitionKey: {}` and `firstPartyDo
 so partitioned cookies (Total Cookie Protection, `partitionKey {topLevelSite,
 hasCrossSiteAncestor}`) and cookies of every first-party domain are included; an unpartitioned
 cookie carries `partitionKey: null`. `setCookie` takes `firstPartyDomain` and `partitionKey`
-only through `--json`. `name` may be empty and `expirationDate` is fractional seconds; a cookie
-without it is a session cookie.
+only through `--json`; Firefox keeps only the site of `topLevelSite`, so
+`https://shop.example.com` comes back as `https://example.com`, and rejects
+`hasCrossSiteAncestor: false` for a cookie of another site; left out, it comes back `true` for
+such a cookie. `name` may be empty and `expirationDate` is fractional seconds; a cookie without
+it is a session cookie.
 
 `setCookie` needs `name` and either `--url` or `--domain`; with only `--domain` the url is
 derived as `https://` for `--secure` and `http://` otherwise. The path is always passed
@@ -486,8 +489,8 @@ export carries `store`, not `storeId`, so the file cannot silently override
 `importCookies --storeId`; an import is a transfer into the target store, never an automatic
 restore of the source store, so `importCookies --json @c.json --storeId firefox-private` moves
 a normal-window login into the private window. An entry counts as imported only when the
-re-query finds its cookie with the value sent; of two entries for the same cookie the later
-wins and the earlier lands in `failed` as `overwritten by a later entry.` An export holds live
+re-query finds its cookie with the value sent; of two entries for the same stored cookie (two
+`topLevelSite` values of one site are one cookie) the later wins and the earlier lands in `failed` as `overwritten by a later entry.` An export holds live
 session cookies, so keep the file private (`umask 077` before the redirect) and delete it after
 the import.
 

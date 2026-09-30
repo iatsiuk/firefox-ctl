@@ -775,6 +775,106 @@ describe("FakeBrowser.cookies", () => {
     expect(wide?.expirationDate).toBe(future)
   })
 
+  test("an IP host is host-only and an IPv6 one comes back in brackets", async () => {
+    const browser = new FakeBrowser()
+    await browser.cookies.set({ url: "http://[::1]/", name: "v6", value: "1" })
+    await browser.cookies.set({ url: "http://[::1]/", name: "v6d", value: "1", domain: "::1" })
+    await browser.cookies.set({
+      url: "http://127.0.0.1/",
+      name: "v4",
+      value: "1",
+      domain: "127.0.0.1",
+    })
+    const all = await browser.cookies.getAll({})
+    expect(all.map((cookie) => [cookie.name, cookie.domain, cookie.hostOnly])).toEqual([
+      ["v6", "[::1]", true],
+      ["v6d", "[::1]", true],
+      ["v4", "127.0.0.1", true],
+    ])
+    expect(names(await browser.cookies.getAll({ url: "http://[::1]/" }))).toEqual(["v6", "v6d"])
+  })
+
+  test("a partitioned cookie outside the top-level site has a cross-site ancestor", async () => {
+    const browser = new FakeBrowser()
+    const top = "https://example.com"
+    await browser.cookies.set({
+      url: "https://widget.test/",
+      name: "w",
+      value: "0",
+      partitionKey: { topLevelSite: top },
+    })
+    await browser.cookies.set({
+      url: "https://widget.test/",
+      name: "w",
+      value: "1",
+      partitionKey: { topLevelSite: top, hasCrossSiteAncestor: true },
+    })
+    await browser.cookies.set({
+      url: "https://sub.example.com/",
+      name: "s",
+      partitionKey: { topLevelSite: top, hasCrossSiteAncestor: false },
+    })
+    await browser.cookies.set({
+      url: "http://[::1]/",
+      name: "v6",
+      partitionKey: { topLevelSite: "http://[::1]" },
+    })
+    const all = await browser.cookies.getAll({ partitionKey: {} })
+    expect(all.map((cookie) => [cookie.name, cookie.value, cookie.partitionKey])).toEqual([
+      ["w", "1", { topLevelSite: top, hasCrossSiteAncestor: true }],
+      ["s", "", { topLevelSite: top, hasCrossSiteAncestor: false }],
+      ["v6", "", { topLevelSite: "http://[::1]", hasCrossSiteAncestor: true }],
+    ])
+  })
+
+  test("rejects a partition key Firefox cannot parse or place", async () => {
+    const browser = new FakeBrowser()
+    const cases: [string, string, boolean | undefined][] = [
+      ["https://widget.test/", "https://example.com", false],
+      ["https://widget.test/", "not a url", undefined],
+    ]
+    for (const [url, topLevelSite, hasCrossSiteAncestor] of cases) {
+      await expect(
+        browser.cookies.set({
+          url,
+          name: "p",
+          partitionKey: { topLevelSite, hasCrossSiteAncestor },
+        }),
+      ).rejects.toThrow("Invalid value for 'partitionKey' attribute")
+    }
+    expect(await browser.cookies.getAll({ partitionKey: {} })).toEqual([])
+  })
+
+  test("a partitioned cookie keeps only the site of its top-level url", async () => {
+    const browser = new FakeBrowser()
+    const cases: [string, string, string, boolean][] = [
+      ["https://widget.example.com/", "https://shop.example.com", "https://example.com", false],
+      ["https://widget.test/", "https://a.b.example.com:8443/x", "https://example.com", true],
+      ["http://localhost:8080/", "http://localhost:8080", "http://localhost", false],
+      ["http://127.0.0.1/", "http://127.0.0.1:9000", "http://127.0.0.1", false],
+    ]
+    for (const [url, topLevelSite, site, ancestor] of cases) {
+      await browser.cookies.set({ url, name: "p", partitionKey: { topLevelSite } })
+      const [cookie] = await browser.cookies.getAll({ url, partitionKey: {} })
+      expect(cookie?.partitionKey).toEqual({ topLevelSite: site, hasCrossSiteAncestor: ancestor })
+    }
+  })
+
+  test("a topLevelSite filter without url matches the site of that url", async () => {
+    const browser = new FakeBrowser()
+    const url = "https://widget.example.com/"
+    await browser.cookies.set({ url, name: "a", partitionKey: { topLevelSite: "https://com" } })
+    await browser.cookies.set({
+      url,
+      name: "b",
+      partitionKey: { topLevelSite: "https://example.com" },
+    })
+    const found = await browser.cookies.getAll({
+      partitionKey: { topLevelSite: "https://shop.example.com:8443/x" },
+    })
+    expect(names(found)).toEqual(["b"])
+  })
+
   test("returns partitioned cookies only when asked with partitionKey {}", async () => {
     const browser = new FakeBrowser()
     await browser.cookies.set({ url: "https://a.test/", name: "plain" })
@@ -789,7 +889,7 @@ describe("FakeBrowser.cookies", () => {
     expect(names(all)).toEqual(["plain", "part"])
     expect(all[1]?.partitionKey).toEqual({
       topLevelSite: "https://top.test",
-      hasCrossSiteAncestor: false,
+      hasCrossSiteAncestor: true,
     })
     const scoped = await browser.cookies.getAll({
       partitionKey: { topLevelSite: "https://top.test" },
@@ -873,7 +973,7 @@ describe("FakeBrowser.cookies", () => {
     const url = "https://a.test/"
     await browser.cookies.set({ url, name: "sid", value: "plain" })
     await browser.cookies.set({ url, name: "sid", value: "fpi", firstPartyDomain: "a.test" })
-    const top = "https://top.test"
+    const top = "https://a.test"
     await browser.cookies.set({
       url,
       name: "sid",

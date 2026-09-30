@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import type { Cookie } from "../src/browser"
+import type { Cookie, CookieSetDetails } from "../src/browser"
 import {
   type CookieEntry,
   cookieFilter,
@@ -9,7 +9,7 @@ import {
   identityKey,
   isSameSite,
   parseCookieEntry,
-  requestedIdentity,
+  requestedCookie,
   setDetails,
   sortCookies,
 } from "../src/cookies"
@@ -312,54 +312,129 @@ describe("identityKey", () => {
   })
 })
 
-describe("requestedIdentity", () => {
+describe("requestedCookie", () => {
+  function stores(details: CookieSetDetails, stored: Cookie): boolean {
+    return requestedCookie(details).key(stored.partitionKey?.topLevelSite) === identityKey(stored)
+  }
+
   test("a host-only set takes the url host", () => {
-    expect(requestedIdentity({ url: "https://Sub.Example.com/x", name: "sid", path: "/" })).toBe(
-      identityKey(cookie({ domain: "sub.example.com", hostOnly: true })),
-    )
+    const details = { url: "https://Sub.Example.com/x", name: "sid", path: "/" }
+    expect(stores(details, cookie({ domain: "sub.example.com", hostOnly: true }))).toBe(true)
+    expect(stores(details, cookie({ domain: ".sub.example.com" }))).toBe(false)
   })
 
   test("an explicit domain gains a leading dot", () => {
-    expect(
-      requestedIdentity({ url: "https://example.com/", name: "sid", domain: "Example.com" }),
-    ).toBe(identityKey(cookie()))
-    expect(
-      requestedIdentity({ url: "https://example.com/", name: "sid", domain: ".example.com" }),
-    ).toBe(identityKey(cookie()))
+    for (const domain of ["Example.com", ".example.com"]) {
+      expect(stores({ url: "https://example.com/", name: "sid", domain }, cookie())).toBe(true)
+    }
   })
 
   test("takes the path given, else the url directory", () => {
     const url = "https://example.com/"
-    expect(requestedIdentity({ url, name: "sid", domain: "example.com", path: "/app" })).toBe(
-      identityKey(cookie({ path: "/app" })),
-    )
-    expect(
-      requestedIdentity({ url: "https://example.com/a/b", name: "sid", domain: "example.com" }),
-    ).toBe(identityKey(cookie({ path: "/a/" })))
+    const details = { url, name: "sid", domain: "example.com", path: "/app" }
+    expect(stores(details, cookie({ path: "/app" }))).toBe(true)
+    expect(stores(details, cookie())).toBe(false)
+    const directory = { url: "https://example.com/a/b", name: "sid", domain: "example.com" }
+    expect(stores(directory, cookie({ path: "/a/" }))).toBe(true)
   })
 
-  test("carries origin attributes and an IPv6 host without brackets", () => {
+  test("carries origin attributes", () => {
     const key = { topLevelSite: "https://top.test", hasCrossSiteAncestor: true }
-    expect(
-      requestedIdentity({ url: "http://[::1]/", name: "", path: "/", partitionKey: key }),
-    ).toBe(identityKey(cookie({ domain: "::1", hostOnly: true, name: "", partitionKey: key })))
-    expect(
-      requestedIdentity({
-        url: "http://a.test/",
-        name: "n",
-        path: "/",
-        firstPartyDomain: "a.test",
-      }),
-    ).toBe(
+    const v6 = cookie({ domain: "[::1]", hostOnly: true, name: "", partitionKey: key })
+    expect(stores({ url: "http://[::1]/", name: "", path: "/", partitionKey: key }, v6)).toBe(true)
+    expect(stores({ url: "http://[::1]/", name: "", path: "/" }, v6)).toBe(false)
+    const fpi = { url: "http://a.test/", name: "n", path: "/", firstPartyDomain: "a.test" }
+    const host = { domain: "a.test", hostOnly: true, name: "n" }
+    expect(stores(fpi, cookie({ ...host, firstPartyDomain: "a.test" }))).toBe(true)
+    expect(stores(fpi, cookie(host))).toBe(false)
+  })
+
+  test("an IP host stays host-only, an IPv6 one in brackets as Firefox answers it", () => {
+    const ip = (domain: string) => cookie({ domain, hostOnly: true })
+    expect(stores({ url: "http://[::1]/", name: "sid", path: "/" }, ip("[::1]"))).toBe(true)
+    const cases: [string, string, string][] = [
+      ["http://127.0.0.1/", "127.0.0.1", "127.0.0.1"],
+      ["http://127.0.0.1/", ".127.0.0.1", "127.0.0.1"],
+      ["http://[::1]/", "::1", "[::1]"],
+      ["http://[::1]/", "[::1]", "[::1]"],
+    ]
+    for (const [url, domain, stored] of cases) {
+      expect(stores({ url, name: "sid", path: "/", domain }, ip(stored))).toBe(true)
+    }
+  })
+
+  test("a cookie outside the site Firefox answers has a cross-site ancestor", () => {
+    const key = (topLevelSite: string, hasCrossSiteAncestor?: boolean) => ({
+      topLevelSite,
+      hasCrossSiteAncestor,
+    })
+    const cases: [string, string | undefined, boolean | undefined, string, boolean][] = [
+      ["https://widget.test/", undefined, undefined, "https://example.com", true],
+      ["https://widget.test/", "widget.test", true, "https://example.com", true],
+      ["https://example.com/", undefined, false, "https://example.com", false],
+      ["https://example.com/", undefined, true, "https://example.com", true],
+      ["https://sub.example.com/", "example.com", undefined, "https://example.com", false],
+      ["https://widget.example.com/", undefined, false, "https://example.com", false],
+      ["http://localhost:8080/", undefined, undefined, "http://localhost", false],
+      ["http://[::1]/", undefined, undefined, "http://[::1]", true],
+    ]
+    for (const [url, domain, asked, site, ancestor] of cases) {
+      const details = { url, name: "sid", path: "/", domain, partitionKey: key(site, asked) }
+      const host = {
+        domain: domain === undefined ? new URL(url).hostname : `.${domain}`,
+        hostOnly: domain === undefined,
+      }
+      expect(stores(details, cookie({ ...host, partitionKey: key(site, ancestor) }))).toBe(true)
+      expect(stores(details, cookie({ ...host, partitionKey: key(site, !ancestor) }))).toBe(false)
+      expect(stores(details, cookie(host))).toBe(false)
+    }
+  })
+
+  test("a partitioned set is keyed under the site Firefox answers, else as given", () => {
+    const details = {
+      url: "https://widget.example.com/",
+      name: "sid",
+      path: "/",
+      partitionKey: { topLevelSite: "https://shop.example.com", hasCrossSiteAncestor: false },
+    }
+    const wanted = requestedCookie(details)
+    expect(wanted.topLevelSite).toBe("https://shop.example.com")
+    const stored = (topLevelSite: string, hasCrossSiteAncestor: boolean) =>
       identityKey(
-        cookie({ domain: "a.test", hostOnly: true, name: "n", firstPartyDomain: "a.test" }),
-      ),
-    )
+        cookie({
+          domain: "widget.example.com",
+          hostOnly: true,
+          partitionKey: { topLevelSite, hasCrossSiteAncestor },
+        }),
+      )
+    expect(wanted.key("https://example.com")).toBe(stored("https://example.com", false))
+    expect(wanted.key("https://com")).toBe(stored("https://com", false))
+    expect(wanted.key()).toBe(stored("https://shop.example.com", true))
+    expect(wanted.key("not a url")).toBe(stored("not a url", true))
+  })
+
+  test("an unpartitioned set has no topLevelSite and ignores the site", () => {
+    const wanted = requestedCookie({
+      url: "https://example.com/",
+      name: "sid",
+      domain: "example.com",
+      partitionKey: {},
+    })
+    expect(wanted.topLevelSite).toBeUndefined()
+    expect(wanted.key("https://example.com")).toBe(identityKey(cookie()))
+    expect(wanted.key()).toBe(identityKey(cookie()))
   })
 
   test("matches what setDetails asks Firefox to store", () => {
-    for (const source of [cookie(), cookie({ domain: "sub.example.com", hostOnly: true })]) {
-      expect(requestedIdentity(setDetails(entry({ ...source }), "s"))).toBe(identityKey(source))
+    const sources = [
+      cookie(),
+      cookie({ domain: "sub.example.com", hostOnly: true }),
+      cookie({ domain: "[::1]", hostOnly: true }),
+      cookie({ domain: "127.0.0.1", hostOnly: true }),
+      cookie({ partitionKey: { topLevelSite: "https://top.test", hasCrossSiteAncestor: true } }),
+    ]
+    for (const source of sources) {
+      expect(stores(setDetails(entry({ ...source }), "s"), source)).toBe(true)
     }
   })
 })

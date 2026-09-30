@@ -287,21 +287,73 @@ export function identityKey(cookie: CookieIdentity): string {
   ])
 }
 
-/** The identity key of the cookie Firefox stores for these set details. */
-export function requestedIdentity(details: CookieSetDetails): string {
+function isIPv4(host: string): boolean {
+  const octets = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host)
+  return octets?.slice(1).every((octet) => Number(octet) < 256) === true
+}
+
+function isSubdomain(host: string, base: string): boolean {
+  return host === base || host.endsWith(`.${base}`)
+}
+
+// the host ext-cookies.js stores for a set: the url host for a host-only
+// cookie, an explicit IP as is (an IP only takes host-only cookies), any
+// other domain with a leading dot; an IPv6 host without its brackets
+function storedHost(url: URL, domain: string | undefined): string {
+  if (domain === undefined) {
+    return url.hostname.replace(/^\[(.*)\]$/, "$1")
+  }
+  const host = (domain.length > 1 ? domain.replace(/^\./, "") : domain)
+    .toLowerCase()
+    .replace(/^\[(.*:.*)\]$/, "$1")
+  return host.includes(":") || isIPv4(host) ? host : `.${host}`
+}
+
+// the hostname of the site Firefox answers, "" for one that does not parse
+function siteHost(site: string): string {
+  return URL.canParse(site) ? new URL(site).hostname : ""
+}
+
+/** The cookie Firefox stores for a set, as far as the details tell it. */
+export type RequestedCookie = {
+  /** the topLevelSite asked for, whose site only Firefox knows */
+  topLevelSite?: string
+  /** the identity key of the stored cookie under the site Firefox answers */
+  key: (site?: string) => string
+}
+
+// ext-cookies.js stores a partitioned set under the site of topLevelSite, its
+// scheme and registrable domain, which needs the public suffix list, so the
+// site comes from Firefox; a set without it falls back to topLevelSite as
+// given. The answer has a cross-site ancestor when the set asked for one or
+// the cookie host is outside the site (getExtPartitionKey)
+export function requestedCookie(details: CookieSetDetails): RequestedCookie {
   const url = new URL(details.url)
-  const hostOnly = details.domain === undefined
-  const domain = hostOnly
-    ? url.hostname.replace(/^\[(.*)\]$/, "$1")
-    : `.${(details.domain as string).replace(/^\./, "")}`
-  return identityKey({
-    domain,
-    hostOnly,
+  const host = storedHost(url, details.domain)
+  const identity = {
+    domain: host.includes(":") ? `[${host}]` : host,
+    hostOnly: !host.startsWith("."),
     path: details.path ?? defaultPath(url.pathname),
     name: details.name ?? "",
     firstPartyDomain: details.firstPartyDomain ?? "",
-    partitionKey: details.partitionKey ?? null,
-  })
+    partitionKey: null,
+  }
+  const requested = details.partitionKey
+  if (!requested?.topLevelSite) {
+    return { key: () => identityKey(identity) }
+  }
+  const topLevelSite = requested.topLevelSite
+  return {
+    topLevelSite,
+    key: (site = topLevelSite) => {
+      const ancestor = requested.hasCrossSiteAncestor ?? false
+      const partitionKey = {
+        topLevelSite: site,
+        hasCrossSiteAncestor: ancestor || !isSubdomain(host, siteHost(site)),
+      }
+      return identityKey({ ...identity, partitionKey })
+    },
+  }
 }
 
 function compare(a: string, b: string): number {

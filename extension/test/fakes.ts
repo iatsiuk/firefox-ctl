@@ -173,8 +173,28 @@ interface StoredCookie {
   created: number
 }
 
+// the host as cookies answer it: an IPv6 host in brackets
 function urlHost(url: URL): string {
-  return url.hostname.replace(/^\[(.*)\]$/, "$1")
+  return url.hostname
+}
+
+// what ext-cookies.js stores for set details: the url host without domain;
+// an IP domain stays host-only, any other domain gains a leading dot
+function cookieHost(url: URL, domain: string | undefined): { domain: string; hostOnly: boolean } {
+  if (domain === undefined) {
+    return { domain: urlHost(url), hostOnly: true }
+  }
+  const host = domain
+    .replace(/^\./, "")
+    .toLowerCase()
+    .replace(/^\[(.*)\]$/, "$1")
+  if (host.includes(":")) {
+    return { domain: `[${host}]`, hostOnly: true }
+  }
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    return { domain: host, hostOnly: true }
+  }
+  return { domain: `.${host}`, hostOnly: false }
 }
 
 // what ext-cookies.js takes when set gets no path: nsIURL.directory, the url
@@ -215,6 +235,56 @@ function normalPartition(key: PartitionKey | undefined | null): PartitionKey | n
   return { topLevelSite: key.topLevelSite, hasCrossSiteAncestor: key.hasCrossSiteAncestor ?? false }
 }
 
+// the site getPartitionKeyFromURL keeps of a top-level url: scheme and
+// registrable domain, here simply the last two labels, or the whole host when
+// it has no registrable domain (an IP, localhost); never a port
+function topSite(topLevelSite: string): URL {
+  const url = new URL(topLevelSite)
+  const labels = url.hostname.split(".")
+  if (url.hostname.startsWith("[") || /^[\d.]+$/.test(url.hostname) || labels.length < 2) {
+    return new URL(`${url.protocol}//${url.hostname}`)
+  }
+  return new URL(`${url.protocol}//${labels.slice(-2).join(".")}`)
+}
+
+function sameSite(host: string, site: URL): boolean {
+  return host === site.hostname || host.endsWith(`.${site.hostname}`)
+}
+
+// the key ext-cookies.js answers: a cookie outside the top-level site always
+// has a cross-site ancestor, and the cookie host of an IP has no brackets, so
+// an IPv6 cookie is never inside its own site
+function storedPartition(key: PartitionKey | undefined, domain: string): PartitionKey | null {
+  const normal = normalPartition(key)
+  if (normal === null) {
+    return null
+  }
+  const site = topSite(normal.topLevelSite as string)
+  const host = domain.replace(/^\./, "").replace(/^\[(.*)\]$/, "$1")
+  return {
+    topLevelSite: site.origin,
+    hasCrossSiteAncestor: normal.hasCrossSiteAncestor || !sameSite(host, site),
+  }
+}
+
+// getPartitionKeyFromURL throws for a topLevelSite that does not parse and
+// for hasCrossSiteAncestor false on a url of another site
+function partitionError(details: CookieSetDetails): string | undefined {
+  const top = details.partitionKey?.topLevelSite
+  if (!top) {
+    return undefined
+  }
+  if (!URL.canParse(top)) {
+    return "Invalid value for 'partitionKey' attribute"
+  }
+  const url = new URL(details.url)
+  const crossSite = topSite(url.origin).hostname !== topSite(top).hostname
+  if (details.partitionKey?.hasCrossSiteAncestor === false && crossSite) {
+    return "Invalid value for 'partitionKey' attribute"
+  }
+  return undefined
+}
+
 function samePartition(a: PartitionKey | null, b: PartitionKey | null): boolean {
   return a?.topLevelSite === b?.topLevelSite && a?.hasCrossSiteAncestor === b?.hasCrossSiteAncestor
 }
@@ -234,8 +304,18 @@ function partitionWanted(query: CookieQuery, cookie: Cookie): boolean {
   if (query.partitionKey === undefined) {
     return cookie.partitionKey === null
   }
-  const wanted = normalPartition(query.partitionKey)
-  return wanted === null || samePartition(wanted, cookie.partitionKey)
+  // a hasCrossSiteAncestor left out matches both values, like the
+  // topLevelSiteFilter of ext-cookies.js
+  const wanted = query.partitionKey
+  if (!wanted?.topLevelSite) {
+    return true
+  }
+  // like a getAll without url, the filter is the site of topLevelSite
+  return (
+    topSite(wanted.topLevelSite).origin === cookie.partitionKey?.topLevelSite &&
+    (wanted.hasCrossSiteAncestor === undefined ||
+      wanted.hasCrossSiteAncestor === cookie.partitionKey.hasCrossSiteAncestor)
+  )
 }
 
 function queryMatches(query: CookieQuery, cookie: Cookie): boolean {
@@ -261,16 +341,22 @@ function queryMatches(query: CookieQuery, cookie: Cookie): boolean {
   return query.url === undefined || urlMatches(new URL(query.url), cookie)
 }
 
+// in the order ext-cookies.js checks: before the write, then the cookie
+// service validation
 function validationError(details: CookieSetDetails): string | undefined {
+  if (details.firstPartyDomain && details.partitionKey?.topLevelSite) {
+    return "Partitioned cookies cannot have a 'firstPartyDomain' attribute."
+  }
+  const partition = partitionError(details)
+  if (partition !== undefined) {
+    return partition
+  }
   const name = details.name ?? ""
   if (name === "" && (details.value ?? "") === "") {
     return "Cookie with an empty name and an empty value has been rejected."
   }
   if (details.sameSite === "no_restriction" && details.secure !== true) {
     return `Cookie “${name}” rejected because it has the “SameSite=None” attribute but is missing the “secure” attribute.`
-  }
-  if (details.firstPartyDomain && details.partitionKey?.topLevelSite) {
-    return "Partitioned cookies cannot have a 'firstPartyDomain' attribute."
   }
   return undefined
 }
@@ -349,14 +435,12 @@ export class FakeCookieJar implements Cookies {
   }
 
   private build(url: URL, details: CookieSetDetails, storeId: string): Cookie {
+    const { domain, hostOnly } = cookieHost(url, details.domain)
     const cookie: Cookie = {
       name: details.name ?? "",
       value: details.value ?? "",
-      domain:
-        details.domain === undefined
-          ? urlHost(url)
-          : `.${details.domain.replace(/^\./, "").toLowerCase()}`,
-      hostOnly: details.domain === undefined,
+      domain,
+      hostOnly,
       path: details.path ?? defaultPath(url),
       secure: details.secure ?? false,
       httpOnly: details.httpOnly ?? false,
@@ -364,7 +448,7 @@ export class FakeCookieJar implements Cookies {
       session: details.expirationDate === undefined,
       storeId,
       firstPartyDomain: details.firstPartyDomain ?? "",
-      partitionKey: normalPartition(details.partitionKey),
+      partitionKey: storedPartition(details.partitionKey, domain),
     }
     if (details.expirationDate !== undefined) {
       cookie.expirationDate = details.expirationDate

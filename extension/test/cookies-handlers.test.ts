@@ -165,7 +165,7 @@ describe("exportCookies", () => {
       value: "4",
       secure: true,
       sameSite: "no_restriction",
-      partitionKey: { topLevelSite: "https://example.com", hasCrossSiteAncestor: false },
+      partitionKey: { topLevelSite: "https://example.com", hasCrossSiteAncestor: true },
     })
     await jar.write({
       url: "https://example.com/",
@@ -239,7 +239,7 @@ describe("exportCookies", () => {
     const [part] = cookies(await run({ name: "part" }))
     expect(part?.partitionKey).toEqual({
       topLevelSite: "https://example.com",
-      hasCrossSiteAncestor: false,
+      hasCrossSiteAncestor: true,
     })
   })
 
@@ -547,6 +547,95 @@ describe("setCookie", () => {
     const result = await set({ url: "https://example.com/", name: "sid", value: "1", path: "/app" })
     expect(stored(result)).toMatchObject({ path: "/app", value: "1" })
   })
+
+  test("an IP host is stored host-only and returned", async () => {
+    const { set } = harness()
+    const cases: [JsonObject, string][] = [
+      [{ url: "http://[::1]/" }, "[::1]"],
+      [{ domain: "::1" }, "[::1]"],
+      [{ domain: "127.0.0.1" }, "127.0.0.1"],
+      [{ url: "http://127.0.0.1/", domain: "127.0.0.1" }, "127.0.0.1"],
+    ]
+    for (const [params, domain] of cases) {
+      const result = await set({ ...params, name: "ip", value: "1" })
+      expect(stored(result)).toMatchObject({ domain, hostOnly: true, value: "1" })
+    }
+  })
+
+  test("a subdomain top-level site is stored and returned as its site", async () => {
+    const { set } = harness()
+    const result = await set({
+      url: "https://widget.example.com/",
+      name: "p",
+      value: "1",
+      secure: true,
+      partitionKey: { topLevelSite: "https://shop.example.com", hasCrossSiteAncestor: false },
+    })
+    expect(stored(result).partitionKey).toEqual({
+      topLevelSite: "https://example.com",
+      hasCrossSiteAncestor: false,
+    })
+  })
+
+  test("a partition key of another site is returned with a cross-site ancestor", async () => {
+    const { set } = harness()
+    const result = await set({
+      url: "https://widget.test/",
+      name: "p",
+      value: "1",
+      secure: true,
+      partitionKey: { topLevelSite: "https://example.com" },
+    })
+    expect(stored(result).partitionKey).toEqual({
+      topLevelSite: "https://example.com",
+      hasCrossSiteAncestor: true,
+    })
+  })
+
+  test("a partition key of another site without a cross-site ancestor is rejected", async () => {
+    const { browser, set } = harness()
+    const params = {
+      url: "https://widget.test/",
+      name: "p",
+      value: "1",
+      secure: true,
+      partitionKey: { topLevelSite: "https://example.com", hasCrossSiteAncestor: false },
+    }
+    await expect(set(params)).rejects.toThrow(
+      "Cannot set cookie p: Invalid value for 'partitionKey' attribute",
+    )
+    expect(browser.cookieQueries).toEqual([])
+  })
+
+  test("re-queries the site of the top-level url and returns the cookie written", async () => {
+    const { browser, set } = harness()
+    // a site of its own, so the ancestor bit is inferred: the host is inside it
+    const partitionKey = { topLevelSite: "https://com" }
+    await browser.cookieJar.write({
+      url: "https://widget.example.com/",
+      name: "p",
+      value: "1",
+      partitionKey,
+    })
+    const result = await set({
+      url: "https://widget.example.com/",
+      name: "p",
+      value: "1",
+      partitionKey: { topLevelSite: "https://shop.example.com", hasCrossSiteAncestor: false },
+    })
+    expect(stored(result).partitionKey).toEqual({
+      topLevelSite: "https://example.com",
+      hasCrossSiteAncestor: false,
+    })
+    expect(browser.cookieQueries).toEqual([
+      {
+        name: "p",
+        storeId: "firefox-default",
+        partitionKey: { topLevelSite: "https://shop.example.com" },
+        firstPartyDomain: null,
+      },
+    ])
+  })
 })
 
 describe("deleteCookies", () => {
@@ -668,7 +757,8 @@ describe("deleteCookies", () => {
   test("the parent-domain collision holds under firstPartyDomain and partitionKey", async () => {
     const origins: Partial<CookieSetDetails>[] = [
       { firstPartyDomain: "example.com" },
-      { partitionKey: { topLevelSite: "https://top.test", hasCrossSiteAncestor: false } },
+      { partitionKey: { topLevelSite: "https://example.com", hasCrossSiteAncestor: false } },
+      { partitionKey: { topLevelSite: "https://example.com", hasCrossSiteAncestor: true } },
       { partitionKey: { topLevelSite: "https://top.test", hasCrossSiteAncestor: true } },
     ]
     for (const origin of origins) {
@@ -859,7 +949,123 @@ describe("importCookies", () => {
     expect(await stored(browser, "firefox-container-2")).toEqual([])
   })
 
-  test("sets every entry, then verifies them with one re-query of the store", async () => {
+  test("an IP cookie and a cross-site partition key without its ancestor bit are imported", async () => {
+    const { imp } = harness()
+    const entries = [
+      entry({ name: "v6", domain: "[::1]" }),
+      entry({ name: "v4", domain: "127.0.0.1" }),
+      entry({
+        name: "part",
+        domain: "widget.test",
+        secure: true,
+        partitionKey: { topLevelSite: "https://example.com" },
+      }),
+    ]
+    const result = await imp({ cookies: entries as unknown as JsonObject[] })
+    expect(result).toEqual({ store: "firefox-default", imported: 3, failed: [] })
+  })
+
+  test("a cross-site partition key without a cross-site ancestor lands in failed", async () => {
+    const { imp } = harness()
+    const entries = [
+      entry({
+        name: "part",
+        domain: "widget.test",
+        secure: true,
+        partitionKey: { topLevelSite: "https://example.com", hasCrossSiteAncestor: false },
+      }),
+    ]
+    const result = await imp({ cookies: entries as unknown as JsonObject[] })
+    expect(result).toEqual({
+      store: "firefox-default",
+      imported: 0,
+      failed: [
+        {
+          name: "part",
+          domain: "widget.test",
+          error: "Invalid value for 'partitionKey' attribute",
+        },
+      ],
+    })
+  })
+
+  test("entries under two hosts of one site are one cookie, the later wins", async () => {
+    const { browser, imp } = harness()
+    const part = (top: string) =>
+      entry({
+        name: "part",
+        domain: "widget.example.com",
+        secure: true,
+        partitionKey: { topLevelSite: top, hasCrossSiteAncestor: false },
+      })
+    const entries = [part("https://shop.example.com"), part("https://news.example.com")]
+    const result = await imp({ cookies: entries as unknown as JsonObject[] })
+    expect(result).toEqual({
+      store: "firefox-default",
+      imported: 1,
+      failed: [
+        { name: "part", domain: "widget.example.com", error: "overwritten by a later entry." },
+      ],
+    })
+    expect((await stored(browser)).length).toBe(1)
+  })
+
+  test("an older cookie under a parent of the site does not count as imported", async () => {
+    const { browser, imp } = harness()
+    const url = "https://widget.example.com/"
+    // a site of its own, so the ancestor bit is inferred: the host is inside it
+    const partitionKey = { topLevelSite: "https://com" }
+    await browser.cookieJar.write({ url, name: "part", value: "1", secure: true, partitionKey })
+    browser.cookieSetHandler = async () => null
+    const entries = [
+      entry({
+        name: "part",
+        domain: "widget.example.com",
+        secure: true,
+        partitionKey: { topLevelSite: "https://shop.example.com", hasCrossSiteAncestor: false },
+      }),
+    ]
+    const result = await imp({ cookies: entries as unknown as JsonObject[] })
+    expect(result).toMatchObject({
+      imported: 0,
+      failed: [{ name: "part", error: "Firefox did not store the cookie." }],
+    })
+  })
+
+  test("a legacy cookie under the top-level site as given does not count as imported", async () => {
+    const { browser, imp } = harness()
+    // kept from before the site rule, so the site re-query does not answer it
+    const partitionKey = { topLevelSite: "https://shop.example.com", hasCrossSiteAncestor: false }
+    const part = entry({ name: "part", domain: "shop.example.com", secure: true, partitionKey })
+    browser.cookieJar.insert({ ...part, storeId: "firefox-default" })
+    browser.cookieSetHandler = async () => null
+    const result = await imp({ cookies: [part] as unknown as JsonObject[] })
+    expect(result).toMatchObject({
+      imported: 0,
+      failed: [{ name: "part", error: "Firefox did not store the cookie." }],
+    })
+  })
+
+  test("an entry with a subdomain top-level site is imported under its site", async () => {
+    const { browser, imp } = harness()
+    const entries = [
+      entry({
+        name: "part",
+        domain: "widget.example.com",
+        secure: true,
+        partitionKey: { topLevelSite: "https://shop.example.com", hasCrossSiteAncestor: false },
+      }),
+    ]
+    const result = await imp({ cookies: entries as unknown as JsonObject[] })
+    expect(result).toEqual({ store: "firefox-default", imported: 1, failed: [] })
+    const [cookie] = await stored(browser)
+    expect(cookie?.partitionKey).toEqual({
+      topLevelSite: "https://example.com",
+      hasCrossSiteAncestor: false,
+    })
+  })
+
+  test("sets every entry, then verifies them with one re-query of the store and site", async () => {
     const { browser, imp } = harness()
     const queriesAtSet: number[] = []
     browser.cookieSetHandler = async (details) => {
@@ -870,7 +1076,14 @@ describe("importCookies", () => {
     const result = await imp({ cookies: exported as unknown as JsonObject[] })
     expect(result.imported).toBe(4)
     expect(queriesAtSet).toEqual([0, 0, 0, 0])
-    expect(browser.cookieQueries).toEqual([{ storeId: "firefox-default", ...every }])
+    expect(browser.cookieQueries).toEqual([
+      { storeId: "firefox-default", ...every },
+      {
+        storeId: "firefox-default",
+        partitionKey: { topLevelSite: "https://example.com" },
+        firstPartyDomain: null,
+      },
+    ])
     expect(browser.cookieSets.map((details) => details.storeId)).toEqual(
       Array(4).fill("firefox-default"),
     )
