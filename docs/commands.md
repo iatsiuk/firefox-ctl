@@ -456,8 +456,12 @@ cookie carries `partitionKey: null`. `setCookie` takes `firstPartyDomain` and `p
 only through `--json`; Firefox keeps only the site of `topLevelSite`, so
 `https://shop.example.com` comes back as `https://example.com`, and rejects
 `hasCrossSiteAncestor: false` for a cookie of another site; left out, it comes back `true` for
-such a cookie. `name` may be empty and `expirationDate` is fractional seconds; a cookie without
-it is a session cookie.
+such a cookie. `expirationDate` is fractional seconds; a cookie without it is a session cookie,
+and Firefox caps a later expiry at about 400 days. An empty `name` is passed on as is, but
+Firefox rejects it while `network.cookie.valueless_cookie` is on, the default: `setCookie`
+answers `Cannot set cookie : ...` with Firefox's "rejected for invalid characters in the name",
+an import entry lands in `failed`, and an unnamed cookie left from an older profile cannot be
+overwritten either, so `deleteCookies` reports it in `failed`.
 
 `setCookie` needs `name` and either `--url` or `--domain`; with only `--domain` the url is
 derived as `https://` for `--secure` and `http://` otherwise. The path is always passed
