@@ -96,6 +96,7 @@ A screenshot reply keeps a 9 MiB budget of its own. firefox-ctl re-encodes a lar
 - Firefox accepts at most 1 MB per command from the host. A larger one, typically a big `importCookies` file, is refused with `Message too large: ...` and the host keeps serving; split the file and import it in parts.
 - Cookie commands on the private managed window read and write `firefox-private`, which needs "Run in Private Windows"; without it Firefox's own error comes back as is. A cookie export holds live session cookies, so keep the file private.
 - A HAR recording redacts only credential headers and cookie values (while the redaction preference is ticked); urls and request and response bodies, posted passwords included, are raw. Bodies are capped at 10 MiB each (`startHar --maxBodySize`) and 160 MiB per recording, and the recording lives in memory until `stopHar`. WebSocket frames, upload file contents and DNS/connect/SSL timings are not captured. See [docs/commands.md](docs/commands.md).
+- A `stopHar` reply over 10 MiB needs a `firefox-ctl` binary from the same release as the add-on: an older host exits on it and the recording is lost. Upgrade the binary when the add-on updates.
 - A command whose page reply never arrives returns `COMMAND_TIMEOUT` at `--request-timeout`. Timed-out work is not cancelled; late results are dropped. `click`, `type`, `pressKey`, and `evaluate` are not retried automatically.
 
 ## Session model

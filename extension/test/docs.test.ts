@@ -140,7 +140,7 @@ describe("screenshot and DevTools documentation", () => {
   })
 
   test.skipIf(root === undefined)(
-    "commands.md documents the frame limit and the downgrade ladder",
+    "commands.md documents the screenshot budget and the downgrade ladder",
     async () => {
       const text = await readRootDoc(join("docs", "commands.md"))
       for (const phrase of [

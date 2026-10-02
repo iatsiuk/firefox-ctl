@@ -224,8 +224,8 @@ captured errors.
 `getNetworkRequests` reads the background page's `webRequest` log: 200 entries shared by every
 tab, filtered down to the target tab, with credential-looking query values redacted.
 `--includeHeaders` adds the response headers, with credential-bearing ones such as
-`Set-Cookie` and `Authorization` reduced to `[redacted]` by default; unticking "Redact
-credential response headers" in the add-on preferences returns them raw. `--clear` empties the
+`Set-Cookie` and `Authorization` reduced to `[redacted]` by default; unticking "Hide
+credentials in headers and cookies" in the add-on preferences returns them raw. `--clear` empties the
 buffer after answering.
 
 `handleConsent` hunts for an accept button in four passes - known CMP selectors, button text,

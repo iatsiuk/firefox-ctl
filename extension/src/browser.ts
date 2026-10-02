@@ -225,7 +225,8 @@ export interface UploadData {
   originalSize?: number
 }
 
-// present only for a listener registered with "requestBody"
+// present only for a listener registered with "requestBody", null for a
+// request without an upload stream
 export interface RequestBody {
   formData?: Record<string, string[]>
   raw?: UploadData[]
@@ -242,7 +243,7 @@ export interface RequestDetails {
   timeStamp: number
   documentUrl?: string
   originUrl?: string
-  requestBody?: RequestBody
+  requestBody?: RequestBody | null
 }
 
 // requestHeaders only for a listener registered with "requestHeaders"
@@ -255,7 +256,8 @@ export interface HeadersReceivedDetails extends RequestDetails {
   statusCode: number
   statusLine: string
   responseHeaders?: HttpHeader[]
-  ip?: string
+  // null when the channel has no peer address, as a cache hit or a data: url
+  ip?: string | null
   fromCache?: boolean
 }
 

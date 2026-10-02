@@ -96,8 +96,8 @@ interface WebRequestRegistration<F> {
  * A webRequest event with the Firefox listener contract: an extraInfoSpec
  * value the event does not accept throws (`accepted` null: no extraInfoSpec
  * at all), delivery honours the filter tabId, optional details reach only
- * listeners that asked for them, and the promise of a "blocking" listener is
- * awaited by the emitter.
+ * listeners that asked for them (a bodyless request's requestBody as null),
+ * and the promise of a "blocking" listener is awaited by the emitter.
  */
 export class FakeWebRequestEvent<F extends (details: never) => unknown>
   implements WebRequestEvent<F>
@@ -191,6 +191,10 @@ export class FakeWebRequestEvent<F extends (details: never) => unknown>
       if (this.accepted?.includes(key) && !registration.extraInfoSpec?.includes(key)) {
         delete copy[key]
       }
+    }
+    // Firefox answers "requestBody" with null for a request without an upload stream
+    if (registration.extraInfoSpec?.includes("requestBody") && copy.requestBody === undefined) {
+      copy.requestBody = null
     }
     return copy
   }

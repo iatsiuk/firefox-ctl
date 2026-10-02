@@ -173,6 +173,8 @@ export interface ResponseBodyRecord {
   complete: boolean
   truncated?: boolean
   error?: string
+  /** Bytes seen, set when more than the ones stored. */
+  size?: number
 }
 
 /** Times are `timeStamp` milliseconds since the epoch. */
@@ -678,6 +680,7 @@ function content(hop: HopRecord): HarContent {
     truncated: body.truncated,
     dropped: hop.bodyDropped,
     error: body.error,
+    size: body.size,
   })
 }
 

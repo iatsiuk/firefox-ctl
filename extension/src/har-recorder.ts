@@ -54,10 +54,13 @@ type NavigationSide = "request" | "before" | "committed"
 /**
  * A page and which of its navigation's events arrived. webRequest and
  * webNavigation are separate event streams, so each side binds to the latest
- * page that has not seen it yet, whatever came first.
+ * page that has not seen it yet, whatever came first, as long as its url is
+ * one the page's navigation already went through.
  */
 interface Page extends Record<NavigationSide, boolean> {
   record: PageRecord
+  /** The navigation's urls without fragments: onBeforeNavigate's, every hop's, onCommitted's. */
+  urls: Set<string>
 }
 
 interface Hop {
@@ -151,6 +154,7 @@ export class HarRecorder {
           request: true,
           before: true,
           committed: true,
+          urls: new Set(),
         },
       ],
       hops: [],
@@ -208,8 +212,10 @@ export class HarRecorder {
     }
   }
 
+  // the old document may still fire once the next navigation began
   private timePage(details: FrameNavigationDetails, field: "domContentLoaded" | "load"): void {
-    const page = this.recordingOf(details)?.pages.at(-1)
+    const pages = this.recordingOf(details)?.pages ?? []
+    const page = [...pages].reverse().find((p) => p.committed)
     if (page !== undefined) {
       page.record[field] ??= details.timeStamp
     }
@@ -284,16 +290,31 @@ function openPage(recording: Recording, start: number, url: string): Page {
     request: false,
     before: false,
     committed: false,
+    urls: new Set(),
   }
   recording.pages.push(page)
   return page
 }
 
-/** The latest page if it still waits for this side, else a new one. */
+function withoutFragment(url: string): string {
+  const hash = url.indexOf("#")
+  return hash < 0 ? url : url.slice(0, hash)
+}
+
+/**
+ * The latest page if it still waits for this side and knows the url, else a
+ * new one: a navigation that never reaches one side, as about:blank never
+ * reaches webRequest, must not take the next navigation's events.
+ */
 function bindPage(recording: Recording, side: NavigationSide, stamp: number, url: string): Page {
   const last = recording.pages.at(-1)
-  const page = last !== undefined && !last[side] ? last : openPage(recording, stamp, url)
+  const key = withoutFragment(url)
+  const page =
+    last !== undefined && !last[side] && (last.urls.size === 0 || last.urls.has(key))
+      ? last
+      : openPage(recording, stamp, url)
   page[side] = true
+  page.urls.add(key)
   page.record.start = Math.min(page.record.start, stamp)
   // the committed url is final; until then the latest request hop names it
   if (side === "committed" || (side === "request" && !page.committed)) {
@@ -305,6 +326,7 @@ function bindPage(recording: Recording, side: NavigationSide, stamp: number, url
 function navigationPage(recording: Recording, details: RequestDetails): Page {
   const known = recording.navigations.get(details.requestId)
   if (known !== undefined) {
+    known.urls.add(withoutFragment(details.url))
     if (!known.committed) {
       known.record.title = details.url
     }
@@ -340,7 +362,8 @@ function beforeRequest(recording: Recording, details: RequestDetails): void {
     cut: false,
     dropped: false,
   }
-  if (capture && details.requestBody !== undefined) {
+  // Firefox gives null, not undefined, for a request without a body
+  if (capture && details.requestBody != null) {
     storeBody(recording, hop, details.requestBody)
   }
   if (capture) {
@@ -371,11 +394,13 @@ function captureResponse(recording: Recording, hop: HopRecord): void {
   }
   recording.filters.push(filter)
   let stored = 0
+  let seen = 0
   filter.ondata = (event) => {
     filter.write(event.data)
     if (recording.stopped) {
       return
     }
+    seen += event.data.byteLength
     const length = Math.min(recording.maxBodySize - stored, recording.budget, event.data.byteLength)
     if (length > 0) {
       body.chunks.push(new Uint8Array(event.data.slice(0, length)))
@@ -385,6 +410,7 @@ function captureResponse(recording: Recording, hop: HopRecord): void {
     // past the cap the page gets the rest straight from the channel
     if (length < event.data.byteLength) {
       body.truncated = true
+      body.size = seen
       filter.disconnect()
     }
   }
@@ -456,7 +482,7 @@ function response(hop: HopRecord, details: HeadersReceivedDetails): void {
   if (details.responseHeaders !== undefined) {
     hop.responseHeaders = details.responseHeaders
   }
-  if (details.ip !== undefined) {
+  if (details.ip != null) {
     hop.ip = details.ip
   }
   if (details.fromCache !== undefined) {

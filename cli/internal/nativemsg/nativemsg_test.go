@@ -179,7 +179,7 @@ func TestReaderDiscardsOversizeFrame(t *testing.T) {
 		{
 			name: "frame at the limit is read",
 			input: func() io.Reader {
-				return lazyFrames(normal(`{"a":"0123456"}`), normal(`{"a":1}`))
+				return lazyFrames(normal(`{"a":"01234567"}`), normal(`{"a":1}`))
 			},
 			want: []error{nil, nil},
 		},

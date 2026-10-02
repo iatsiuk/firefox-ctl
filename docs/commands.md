@@ -226,7 +226,7 @@ script) and the capture proceeds. The result reports it as
 `readiness {waitMs, timedOut, timeline}`, the timeline being `{t, event, ...}` entries from
 `start` to `complete`.
 
-### The frame limit
+### The screenshot budget
 
 The host accepts extension frames up to 256 MiB, but a screenshot keeps a 9 MiB budget of its own:
 the handler measures the serialised reply and keeps it under 9 MiB. Over that it re-encodes the
@@ -414,7 +414,7 @@ Response headers are stripped unless `--includeHeaders`. Even then the credentia
 - `set-cookie`, `cookie`, `authorization`, `proxy-authorization`, `www-authenticate` and
 `proxy-authenticate`, matched case-insensitively - keep their name but come back with the value
 `[redacted]`. That is the default; the only way to see the raw values, `Set-Cookie` among them,
-is to untick "Redact credential response headers" in the add-on preferences
+is to untick "Hide credentials in headers and cookies" in the add-on preferences
 (about:addons > Terminal Control for Firefox > Preferences). The setting is read on every call, so a toggle takes
 effect at once, and the buffer itself always holds the raw headers - redaction happens on the
 way out. `--type` and `--status` filter, `--limit` (50) keeps the newest, and `--clear`
@@ -578,8 +578,8 @@ HAR 1.2 allows custom fields with a leading `_`; these are the ones used:
 
 ### Redaction
 
-The HAR follows the same preference as `getNetworkRequests`: while "Redact credential response
-headers" is ticked, the default, the values of `set-cookie`, `cookie`, `authorization`,
+The HAR follows the same preference as `getNetworkRequests`: while "Hide credentials in headers
+and cookies" is ticked, the default, the values of `set-cookie`, `cookie`, `authorization`,
 `proxy-authorization`, `www-authenticate` and `proxy-authenticate` become `[redacted]` in request
 and response headers alike, every duplicate included, and so does every value in
 `request.cookies` and `response.cookies`. Nothing else is touched: urls, query strings, request

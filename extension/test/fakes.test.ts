@@ -1241,7 +1241,7 @@ describe("FakeBrowser.webRequest delivery", () => {
   test("optional details reach only listeners that asked for them", () => {
     const browser = new FakeBrowser()
     const filter = { urls: ["<all_urls>"] }
-    const bodies: (RequestBody | undefined)[] = []
+    const bodies: (RequestBody | null | undefined)[] = []
     const requestHeaders: (HttpHeader[] | undefined)[] = []
     const responseHeaders: (HttpHeader[] | undefined)[] = []
     for (const spec of [["requestBody"], []]) {
@@ -1282,6 +1282,26 @@ describe("FakeBrowser.webRequest delivery", () => {
     expect(bodies).toEqual([body, undefined])
     expect(requestHeaders).toEqual([headers, undefined])
     expect(responseHeaders).toEqual([headers, undefined])
+  })
+
+  test("a request without a body reaches a requestBody listener as null", () => {
+    const browser = new FakeBrowser()
+    const filter = { urls: ["<all_urls>"] }
+    const bodies: (RequestBody | null | undefined)[] = []
+    for (const spec of [["requestBody"], []]) {
+      browser.webRequest.onBeforeRequest.addListener(
+        (details) => {
+          bodies.push(details.requestBody)
+          return undefined
+        },
+        filter,
+        spec,
+      )
+    }
+
+    browser.emitRequestStarted(request())
+
+    expect(bodies).toEqual([null, undefined])
   })
 
   test("emitters default timeStamp to the fake clock and fill response fields", () => {

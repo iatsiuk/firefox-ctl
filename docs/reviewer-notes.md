@@ -70,7 +70,7 @@ No command line flag can change either of them.
   `EVALUATE_DISABLED: evaluate is disabled; enable it in the add-on preferences (about:addons
   > Terminal Control for Firefox > Preferences)` and no message is sent to the tab, so no string from the host is
   ever compiled. An unreadable `storage.local` keeps the gate shut
-- "Redact credential response headers" - on by default. With it on, `getNetworkRequests
+- "Hide credentials in headers and cookies" - on by default. With it on, `getNetworkRequests
   --includeHeaders` keeps the header names but replaces the values of `set-cookie`, `cookie`,
   `authorization`, `proxy-authorization`, `www-authenticate` and `proxy-authenticate` with
   `[redacted]`, and the HAR from `stopHar` does the same in request and response headers and

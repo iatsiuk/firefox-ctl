@@ -266,6 +266,14 @@ describe("HarRecorder request lifecycle", () => {
     expect(only(h.entries())._fromCache).toBe(true)
   })
 
+  test("a response without a peer address has no serverIPAddress", () => {
+    const h = harness()
+    h.start()
+    void h.browser.emitRequestStarted(req())
+    h.browser.emitRequestCompleted({ ...req(), fromCache: true, ip: null })
+    expect(only(h.entries()).serverIPAddress).toBeUndefined()
+  })
+
   test("a redirect chain gives one entry per hop", () => {
     const h = harness()
     h.start()
@@ -413,6 +421,18 @@ describe("HarRecorder request bodies", () => {
     expect(only(h.entries()).request.postData).toEqual({ mimeType: "", text: "x" })
   })
 
+  test("a GET under the default maxBodySize is recorded with bodySize 0", () => {
+    const h = harness()
+    h.start()
+    complete(h, req(), 600)
+
+    const entry = only(h.entries())
+    expect(entry.request.url).toBe("https://example.com/api")
+    expect(entry.request.bodySize).toBe(0)
+    expect(entry.request.postData).toBeUndefined()
+    expect(entry.response.status).toBe(200)
+  })
+
   test("maxBodySize 0 stores no request body", () => {
     const h = harness()
     h.start({ maxBodySize: 0 })
@@ -490,6 +510,39 @@ describe("HarRecorder request bodies", () => {
     post(h, req({ requestId: "r2" }), rawBody("x"), "text/plain")
     const [, second] = h.entries()
     expect(second?.request.postData).toEqual({ mimeType: "text/plain", _bodyDropped: true })
+  })
+
+  test("file parts of a multipart body survive the cut", () => {
+    const h = harness()
+    h.start({ maxBodySize: 2 })
+    const body: RequestBody = { raw: [{ bytes: bytes("abcd") }, { file: "<file>" }] }
+    post(h, req(), body, "multipart/form-data; boundary=x")
+    expect(only(h.entries()).request.postData).toEqual({
+      mimeType: "multipart/form-data; boundary=x",
+      text: "ab",
+      _fileParts: 1,
+      _truncated: true,
+    })
+  })
+
+  test("a body Firefox could not read comes out with _error", () => {
+    const h = harness()
+    h.start()
+    post(h, req(), { error: "Unable to read" }, "text/plain")
+    expect(only(h.entries()).request.postData).toEqual({
+      mimeType: "text/plain",
+      text: "",
+      _error: "Unable to read",
+    })
+  })
+
+  test("a body without bytes is kept once the budget is spent", () => {
+    const h = harness()
+    h.start({ maxBodySize: 4, bodyBudget: 4 })
+    post(h, req({ requestId: "r1" }), rawBody("abcd"), "text/plain")
+    post(h, req({ requestId: "r2" }), { raw: [{ file: "<file>" }] }, "text/plain")
+    const [, second] = h.entries().map((e) => e.request.postData)
+    expect(second).toEqual({ mimeType: "text/plain", text: "", _fileParts: 1 })
   })
 
   test("only the stored prefix is kept, never Firefox's buffers", () => {
@@ -644,6 +697,88 @@ describe("HarRecorder pages", () => {
       expect(log.entries.map((e) => e.pageref)).toEqual(["page_2", "page_3"])
     })
   }
+
+  test("a navigation without a request leaves the next navigation's document on its own page", () => {
+    const h = harness()
+    h.start()
+    // about:blank, data: and back-forward cache loads reach no webRequest listener
+    h.at(1000)
+    h.browser.emitBeforeNavigate({ tabId: TAB_ID, frameId: 0, url: "about:blank" })
+    h.browser.emitCommitted({ tabId: TAB_ID, frameId: 0, url: "about:blank" })
+    for (const [index, id] of ["one", "two"].entries()) {
+      h.at(2000 + index * 1000)
+      navigate(h, id, `https://${id}.example/`, ["request", "before", "committed"])
+    }
+    const log = buildLog(h.stop()).log
+    expect(log.pages.map((p) => [p.id, p.title])).toEqual([
+      ["page_1", TAB_URL],
+      ["page_2", "about:blank"],
+      ["page_3", "https://one.example/"],
+      ["page_4", "https://two.example/"],
+    ])
+    expect(log.entries.map((e) => e.pageref)).toEqual(["page_3", "page_4"])
+  })
+
+  test("a navigation in flight at start does not shift the pages after it", () => {
+    const h = harness()
+    h.start()
+    // its onBeforeNavigate and request came before start
+    h.at(1000)
+    h.browser.emitCommitted({ tabId: TAB_ID, frameId: 0, url: "https://early.example/" })
+    for (const [index, id] of ["one", "two"].entries()) {
+      h.at(2000 + index * 1000)
+      navigate(h, id, `https://${id}.example/`, ["before", "request", "committed"])
+    }
+    const log = buildLog(h.stop()).log
+    expect(log.pages.map((p) => [p.id, p.title])).toEqual([
+      ["page_1", TAB_URL],
+      ["page_2", "https://early.example/"],
+      ["page_3", "https://one.example/"],
+      ["page_4", "https://two.example/"],
+    ])
+    expect(log.entries.map((e) => e.pageref)).toEqual(["page_3", "page_4"])
+  })
+
+  test("a fragment in the navigation url still binds to the request", () => {
+    const h = harness()
+    h.start()
+    h.at(1000)
+    h.browser.emitBeforeNavigate({ tabId: TAB_ID, frameId: 0, url: "https://one.example/#top" })
+    void h.browser.emitRequestStarted(
+      req({ requestId: "one", url: "https://one.example/", type: "main_frame" }),
+    )
+    h.browser.emitCommitted({ tabId: TAB_ID, frameId: 0, url: "https://one.example/#top" })
+    const log = buildLog(h.stop()).log
+    expect(log.pages.map((p) => [p.id, p.title])).toEqual([
+      ["page_1", TAB_URL],
+      ["page_2", "https://one.example/#top"],
+    ])
+    expect(log.entries.map((e) => e.pageref)).toEqual(["page_2"])
+  })
+
+  test("the old document's load timings never land on the next page", () => {
+    const h = harness()
+    h.start()
+    h.at(1000)
+    h.browser.emitBeforeNavigate({ tabId: TAB_ID, frameId: 0, url: "https://one.example/" })
+    h.at(1100)
+    h.browser.emitFrameLoaded({ tabId: TAB_ID, frameId: 0, url: TAB_URL })
+    h.browser.emitNavigationCompleted({ tabId: TAB_ID, frameId: 0, url: TAB_URL })
+    h.at(1200)
+    void h.browser.emitRequestStarted(
+      req({ requestId: "one", url: "https://one.example/", type: "main_frame" }),
+    )
+    h.browser.emitCommitted({ tabId: TAB_ID, frameId: 0, url: "https://one.example/" })
+    h.at(1500)
+    h.browser.emitFrameLoaded({ tabId: TAB_ID, frameId: 0, url: "https://one.example/" })
+    h.at(1700)
+    h.browser.emitNavigationCompleted({ tabId: TAB_ID, frameId: 0, url: "https://one.example/" })
+    const log = buildLog(h.stop()).log
+    expect(log.pages.map((p) => p.pageTimings)).toEqual([
+      { onContentLoad: 600, onLoad: 600 },
+      { onContentLoad: 500, onLoad: 700 },
+    ])
+  })
 
   test("navigation events of other tabs and child frames are ignored", () => {
     const h = harness()
@@ -854,6 +989,8 @@ describe("HarRecorder response body limits", () => {
     expect(text(filter.pageData())).toBe("abcdefgh")
     const content = h.entries()[0]?.response.content
     expect(content?.text).toBe("abcd")
+    // the bytes seen up to the disconnect, the overflowing chunk included
+    expect(content?.size).toBe(6)
     expect(content?._truncated).toBe(true)
     expect(content?._complete).toBe(false)
   })
@@ -865,6 +1002,7 @@ describe("HarRecorder response body limits", () => {
     expect(filter.status).toBe("closed")
     const content = h.entries()[0]?.response.content
     expect(content?.text).toBe("abcd")
+    expect(content?.size).toBe(4)
     expect(content?._truncated).toBeUndefined()
   })
 
@@ -880,6 +1018,7 @@ describe("HarRecorder response body limits", () => {
     const [first, second, third] = h.entries().map((entry) => entry.response.content)
     expect(first?.text).toBe("abcd")
     expect(second?.text).toBe("wx")
+    expect(second?.size).toBe(4)
     expect(second?._truncated).toBe(true)
     expect(third?._bodyDropped).toBe(true)
     expect(third?.text).toBeUndefined()
@@ -953,6 +1092,19 @@ describe("HarRecorder stream filter release", () => {
     expect(content?.text).toBe("ab")
     expect(content?._complete).toBe(false)
   })
+
+  for (const status of ["suspended", "finishedtransferringdata"] as const) {
+    test(`stop disconnects a filter ${status}`, () => {
+      const h = harness()
+      h.start()
+      textRequest(h, req())
+      const filter = filterOf(h)
+      filter.pushStart()
+      filter.status = status
+      h.stop()
+      expect(filterOf(h).status).toBe("disconnected")
+    })
+  }
 
   test("a filter before onstart disconnects on its onstart and stays out of the recording", () => {
     const h = harness()
