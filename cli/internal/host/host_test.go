@@ -174,11 +174,13 @@ type options struct {
 	drainTimeout   time.Duration
 	maxConns       int
 	maxRequestSize int
+	maxInbound     uint32
+	writeTimeout   time.Duration
 	stdout         io.Writer
 	listener       net.Listener
 }
 
-func start(t *testing.T, opt options) *fixture {
+func start(t *testing.T, opt *options) *fixture {
 	t.Helper()
 
 	sock := filepath.Join(shortTempDir(t), "s")
@@ -209,6 +211,8 @@ func start(t *testing.T, opt options) *fixture {
 		DrainTimeout:   opt.drainTimeout,
 		MaxConnections: opt.maxConns,
 		MaxRequestSize: opt.maxRequestSize,
+		MaxInbound:     opt.maxInbound,
+		WriteTimeout:   opt.writeTimeout,
 		AfterFunc:      clock.afterFunc,
 	})
 
@@ -327,7 +331,7 @@ func boolPtr(v bool) *bool { return &v }
 func TestServerForwardsCommandAndRoutesResponse(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 	c := f.dial()
 
 	c.sendCommand(t, "navigate", map[string]any{"url": "https://example.com"})
@@ -373,7 +377,7 @@ func TestServerForwardsCommandAndRoutesResponse(t *testing.T) {
 func TestServerForwardsErrorResponse(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 	c := f.dial()
 
 	c.sendCommand(t, "click", nil)
@@ -402,7 +406,7 @@ func TestServerForwardsErrorResponse(t *testing.T) {
 func TestServerRoutesConcurrentClients(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 	first, second := f.dial(), f.dial()
 
 	first.sendCommand(t, "ping", nil)
@@ -459,7 +463,7 @@ func TestServerRequestTimeout(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := start(t, options{})
+			f := start(t, &options{})
 			c := f.dial()
 
 			c.sendCommand(t, "getContent", tc.params)
@@ -496,7 +500,7 @@ func TestServerRequestTimeout(t *testing.T) {
 func TestServerTimeoutFiresOnce(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 	c := f.dial()
 
 	c.sendCommand(t, "ping", nil)
@@ -518,7 +522,7 @@ func TestServerTimeoutFiresOnce(t *testing.T) {
 func TestServerClearsTimerOnResponse(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 	c := f.dial()
 
 	c.sendCommand(t, "ping", nil)
@@ -536,7 +540,7 @@ func TestServerClearsTimerOnResponse(t *testing.T) {
 func TestServerIgnoresLateTimerAfterResponse(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 	c := f.dial()
 
 	c.sendCommand(t, "ping", nil)
@@ -559,7 +563,7 @@ func TestServerIgnoresLateTimerAfterResponse(t *testing.T) {
 func TestServerDropsPendingOnClientDisconnect(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 	c := f.dial()
 
 	c.sendCommand(t, "screenshot", nil)
@@ -584,7 +588,7 @@ func TestServerDropsPendingOnClientDisconnect(t *testing.T) {
 func TestServerIdleTimeoutClosesSilentConnection(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{idleTimeout: 50 * time.Millisecond})
+	f := start(t, &options{idleTimeout: 50 * time.Millisecond})
 	c := f.dial()
 
 	_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -597,7 +601,7 @@ func TestServerIdleTimeoutClosesSilentConnection(t *testing.T) {
 func TestServerIdleTimeoutDisarmedByRequest(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{idleTimeout: 50 * time.Millisecond})
+	f := start(t, &options{idleTimeout: 50 * time.Millisecond})
 	c := f.dial()
 
 	c.sendCommand(t, "waitFor", map[string]any{"selector": "#done"})
@@ -634,7 +638,7 @@ func TestServerRejectsInvalidRequests(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := start(t, options{})
+			f := start(t, &options{})
 			c := f.dial()
 
 			c.send(t, tc.line)
@@ -654,7 +658,7 @@ func TestServerRejectsInvalidRequests(t *testing.T) {
 func TestServerIgnoresBlankLines(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 	c := f.dial()
 
 	c.send(t, "")
@@ -669,7 +673,7 @@ func TestServerIgnoresBlankLines(t *testing.T) {
 func TestServerRejectsOversizeRequest(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{maxRequestSize: 256})
+	f := start(t, &options{maxRequestSize: 256})
 	c := f.dial()
 
 	big := strings.Repeat("x", 1024)
@@ -702,7 +706,7 @@ func TestServerRefusesCommandAboveFirefoxLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := start(t, options{})
+			f := start(t, &options{})
 			c := f.dial()
 
 			c.sendCommand(t, "importCookies", tc.params)
@@ -821,7 +825,7 @@ func TestServerDrainReleasesSlotAtDeadline(t *testing.T) {
 
 	const drain = 50 * time.Millisecond
 
-	f := start(t, options{maxRequestSize: 256, maxConns: 1, drainTimeout: drain})
+	f := start(t, &options{maxRequestSize: 256, maxConns: 1, drainTimeout: drain})
 	stuck := f.dial()
 
 	sent := time.Now()
@@ -868,7 +872,7 @@ func TestServerDrainDeadlineIsAbsolute(t *testing.T) {
 
 	const drain = 50 * time.Millisecond
 
-	f := start(t, options{maxRequestSize: 256, drainTimeout: drain})
+	f := start(t, &options{maxRequestSize: 256, drainTimeout: drain})
 	c := f.dial()
 
 	sent := time.Now()
@@ -905,7 +909,7 @@ func TestServerDrainDeadlineIsAbsolute(t *testing.T) {
 func TestServerCloseInterruptsDrain(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{maxRequestSize: 256, drainTimeout: 30 * time.Second})
+	f := start(t, &options{maxRequestSize: 256, drainTimeout: 30 * time.Second})
 	c := f.dial()
 	c.refuse(t)
 	c.awaitEOF(t)
@@ -953,7 +957,7 @@ func TestNewServerDrainTimeout(t *testing.T) {
 func TestServerStopsOnStdinEOF(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 
 	if err := f.stdin.Close(); err != nil {
 		t.Fatalf("close stdin: %v", err)
@@ -967,7 +971,7 @@ func TestServerStopsOnStdinEOF(t *testing.T) {
 func TestServerStopsOnContextCancel(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 	f.dial()
 	f.cancel()
 
@@ -982,7 +986,7 @@ func TestServerStopsOnContextCancel(t *testing.T) {
 func TestServerDropsPendingOnShutdown(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 	c := f.dial()
 
 	c.sendCommand(t, "ping", nil)
@@ -1039,7 +1043,7 @@ func TestServerServeDropsConnectionDuringShutdown(t *testing.T) {
 func TestServerAnswersExtensionPing(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 
 	f.ext.reply(t, &protocol.ExtensionMessage{ID: "ext-1", Command: "ping"})
 
@@ -1069,7 +1073,7 @@ func TestServerAnswersExtensionPing(t *testing.T) {
 func TestServerAnswersExtensionVersion(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 
 	f.ext.reply(t, &protocol.ExtensionMessage{ID: "ext-2", Command: "version"})
 
@@ -1099,7 +1103,7 @@ func TestServerAnswersExtensionVersion(t *testing.T) {
 func TestServerDropsUnknownExtensionMessage(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 
 	f.ext.reply(t, &protocol.ExtensionMessage{ID: "orphan", Command: "surprise"})
 	f.ext.reply(t, &protocol.ExtensionMessage{ID: "ext-3", Command: "ping"})
@@ -1117,7 +1121,7 @@ func TestServerDropsUnknownExtensionMessage(t *testing.T) {
 func TestServerSkipsMalformedExtensionFrame(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{})
+	f := start(t, &options{})
 
 	writeFrame(t, f.stdin, []byte(`{"id":`))
 	f.ext.reply(t, &protocol.ExtensionMessage{ID: "ext-4", Command: "ping"})
@@ -1132,18 +1136,19 @@ func TestServerStopsOnStdinFramingError(t *testing.T) {
 
 	tests := []struct {
 		name  string
+		limit uint32
 		frame []byte
-		want  error
 	}{
-		{name: "partial frame", frame: append(header(64), []byte("{}")...), want: io.ErrUnexpectedEOF},
-		{name: "oversize header then eof", frame: header(nativemsg.MaxInbound + 1), want: io.ErrUnexpectedEOF},
+		{name: "partial frame", frame: append(header(64), []byte("{}")...)},
+		{name: "oversize header then eof", frame: header(nativemsg.MaxInbound + 1)},
+		{name: "eof inside the discarded payload", limit: 16, frame: append(header(64), bytes.Repeat([]byte("x"), 32)...)},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := start(t, options{})
+			f := start(t, &options{maxInbound: tc.limit})
 
 			if _, err := f.stdin.Write(tc.frame); err != nil {
 				t.Fatalf("write frame: %v", err)
@@ -1152,13 +1157,415 @@ func TestServerStopsOnStdinFramingError(t *testing.T) {
 			_ = f.stdin.Close()
 
 			err := f.wait()
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("Run() = %v, want %v", err, tc.want)
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("Run() = %v, want %v", err, io.ErrUnexpectedEOF)
 			}
 			if errors.Is(err, nativemsg.ErrTooLarge) {
 				t.Errorf("Run() = %v, a frame cut short is not ErrTooLarge", err)
 			}
+
+			assertNoSocket(t, f.sock)
 		})
+	}
+}
+
+// TestServerSurvivesDiscardedFrame pins the recovery from an oversize frame
+// whose declared length was fully read away: the framing is intact, so the
+// host logs it and keeps serving. The reply it carried is lost, so its
+// request ends with the regular timeout reply.
+func TestServerSurvivesDiscardedFrame(t *testing.T) {
+	t.Parallel()
+
+	f := start(t, &options{maxInbound: 1024})
+	c := f.dial()
+
+	c.sendCommand(t, "stopHar", nil)
+	cmd := f.ext.read(t)
+	timer := f.clock.next(t)
+
+	writeFrame(t, f.stdin, []byte(fmt.Sprintf(`{"id":%q,"success":true,"result":%q}`, cmd.ID, strings.Repeat("x", 4096))))
+
+	waitFor(t, "discarded frame logged", func() bool {
+		return strings.Contains(f.logs.String(), "discarding extension message: message too large")
+	})
+
+	timer.fire()
+
+	if got := c.raw(t); got["error"] != "Request timed out after 150000ms (command: stopHar)" {
+		t.Errorf("response to the dropped reply = %v, want the timeout reply", got)
+	}
+
+	c.sendCommand(t, "version", nil)
+	next := f.ext.read(t)
+	f.ext.reply(t, &protocol.ExtensionMessage{ID: next.ID, Success: boolPtr(true), Result: json.RawMessage(`{"ok":true}`)})
+
+	if got := c.raw(t); got["success"] != true {
+		t.Errorf("response after the discarded frame = %v, want success", got)
+	}
+
+	f.ext.reply(t, &protocol.ExtensionMessage{ID: "ext-5", Command: "ping"})
+
+	if got := f.ext.read(t); got.ID != "ext-5" {
+		t.Errorf("ping after the discarded frame answered %+v", got)
+	}
+}
+
+// TestServerStopsDuringDrain covers shutdown while an oversize frame is read
+// away: cancellation is a normal exit, it does not wait for the payload.
+func TestServerStopsDuringDrain(t *testing.T) {
+	t.Parallel()
+
+	f := start(t, &options{maxInbound: 16})
+
+	if _, err := f.stdin.Write(append(header(1<<20), bytes.Repeat([]byte("x"), 64)...)); err != nil {
+		t.Fatalf("write frame: %v", err)
+	}
+
+	f.cancel()
+
+	if err := f.wait(); err != nil {
+		t.Errorf("Run() = %v, want nil on cancellation during a drain", err)
+	}
+
+	assertNoSocket(t, f.sock)
+}
+
+func assertNoSocket(t *testing.T, path string) {
+	t.Helper()
+
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("socket %s still exists after Run returned (err = %v)", path, err)
+	}
+}
+
+// TestServerReplyKeepsResultBytes guards against HTML escaping: json.Marshal
+// turns <, >, & and U+2028 inside a raw result into \u escapes, which bloats a
+// HAR body sixfold and breaks byte equality with what the extension sent.
+func TestServerReplyKeepsResultBytes(t *testing.T) {
+	t.Parallel()
+
+	f := start(t, &options{})
+	c := f.dial()
+
+	c.sendCommand(t, "stopHar", nil)
+	cmd := f.ext.read(t)
+
+	result := "{\"text\":\"<a href=\\\"x\\\">&amp;</a> \u2028 \u2029 привет 日本 😀\"}"
+	writeFrame(t, f.stdin, []byte(fmt.Sprintf(`{"id":%q,"success":true,"result":%s}`, cmd.ID, result)))
+
+	_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	line, err := c.r.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+
+	if want := `{"success":true,"result":` + result + "}\n"; string(line) != want {
+		t.Errorf("response line = %q, want %q", line, want)
+	}
+}
+
+func TestServerReplyDropsInvalidResult(t *testing.T) {
+	t.Parallel()
+
+	logs := &safeBuffer{}
+	srv := NewServer(&Options{Logger: log.New(logs, "", 0), Version: testVersion})
+	conn := &recordingConn{}
+	c := &clientConn{nc: conn, ids: make(map[string]struct{})}
+
+	srv.reply(c, protocol.ClientResponse{Success: true, Result: json.RawMessage(`{"open":`)})
+
+	if !strings.Contains(logs.String(), "marshal response: compact result:") {
+		t.Errorf("logs = %q, want the invalid result logged", logs.String())
+	}
+
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	if conn.data.Len() != 0 {
+		t.Errorf("reply wrote %q for an invalid result, want nothing", conn.data.String())
+	}
+}
+
+func TestServerReplyLineCarriesEveryField(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer(&Options{Logger: log.New(io.Discard, "", 0), Version: testVersion})
+	conn := &recordingConn{}
+	c := &clientConn{nc: conn, ids: make(map[string]struct{})}
+
+	srv.reply(c, protocol.ClientResponse{Error: "TAB_CLOSED: <gone>", Result: json.RawMessage(` [ 1, "<&>" ] `)})
+
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	if want := `{"success":false,"error":"TAB_CLOSED: <gone>","result":[1,"<&>"]}` + "\n"; conn.data.String() != want {
+		t.Errorf("line = %q, want %q", conn.data.String(), want)
+	}
+}
+
+// recordingConn records the writes and write deadlines reply issues.
+type recordingConn struct {
+	net.Conn
+
+	mu     sync.Mutex
+	events []string
+	sizes  []int
+	data   bytes.Buffer
+}
+
+func (c *recordingConn) SetWriteDeadline(time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.events = append(c.events, "deadline")
+
+	return nil
+}
+
+func (c *recordingConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.events = append(c.events, "write")
+	c.sizes = append(c.sizes, len(p))
+	c.data.Write(p)
+
+	return len(p), nil
+}
+
+func TestServerReplyWritesChunksUnderOwnDeadline(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer(&Options{Logger: log.New(io.Discard, "", 0), Version: testVersion})
+	conn := &recordingConn{}
+	c := &clientConn{nc: conn, ids: make(map[string]struct{})}
+
+	result := json.RawMessage(`"` + strings.Repeat("a", 3*writeChunkSize+100) + `"`)
+	srv.reply(c, protocol.ClientResponse{Success: true, Result: result})
+
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	want := `{"success":true,"result":` + string(result) + "}\n"
+	if conn.data.String() != want {
+		t.Fatalf("written %d bytes, want the %d-byte line", conn.data.Len(), len(want))
+	}
+
+	if len(conn.sizes) != 4 {
+		t.Errorf("writes = %v, want 4 chunks", conn.sizes)
+	}
+
+	for i, n := range conn.sizes {
+		if n > writeChunkSize {
+			t.Errorf("chunk %d is %d bytes, above %d", i, n, writeChunkSize)
+		}
+	}
+
+	for i, ev := range conn.events {
+		if want := []string{"deadline", "write"}[i%2]; ev != want {
+			t.Fatalf("events = %v, want a deadline before every write", conn.events)
+		}
+	}
+}
+
+// TestServerReplyReachesSlowReader proves the deadline bounds one chunk, not
+// the whole reply: a client that keeps reading gets a reply that takes many
+// write timeouts to deliver.
+func TestServerReplyReachesSlowReader(t *testing.T) {
+	t.Parallel()
+
+	const writeTimeout = 100 * time.Millisecond
+
+	f := start(t, &options{writeTimeout: writeTimeout})
+	c := f.dial()
+
+	c.sendCommand(t, "stopHar", nil)
+	cmd := f.ext.read(t)
+
+	result := `"` + strings.Repeat("s", 2<<20) + `"`
+	writeFrame(t, f.stdin, []byte(fmt.Sprintf(`{"id":%q,"success":true,"result":%s}`, cmd.ID, result)))
+
+	want := `{"success":true,"result":` + result + "}\n"
+	began := time.Now()
+	got := slowRead(t, c.conn, len(want), 16*1024, 2*time.Millisecond)
+
+	if string(got) != want {
+		t.Fatalf("slow reader got %d bytes, want the %d-byte reply", len(got), len(want))
+	}
+
+	if elapsed := time.Since(began); elapsed <= writeTimeout {
+		t.Errorf("reply took %s, not longer than one write timeout; the test proves nothing", elapsed)
+	}
+}
+
+// slowRead reads n bytes in portions of size with a pause after each.
+func slowRead(t *testing.T, conn net.Conn, n, size int, pause time.Duration) []byte {
+	t.Helper()
+
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+
+	out := make([]byte, 0, n)
+	buf := make([]byte, size)
+
+	for len(out) < n {
+		got, err := conn.Read(buf)
+		out = append(out, buf[:got]...)
+
+		if err != nil {
+			t.Fatalf("read after %d bytes: %v", len(out), err)
+		}
+
+		time.Sleep(pause)
+	}
+
+	return out
+}
+
+// TestServerReplyCutsStalledChunk pins that a chunk which does not complete
+// within the write timeout ends the client even when part of it went out: the
+// line cannot be resumed, so a partial chunk is a stall, not progress.
+func TestServerReplyCutsStalledChunk(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer(&Options{
+		Logger:       log.New(io.Discard, "", 0),
+		Version:      testVersion,
+		WriteTimeout: 50 * time.Millisecond,
+	})
+
+	server, peer := net.Pipe()
+	t.Cleanup(func() { _ = peer.Close(); _ = server.Close() })
+
+	c := &clientConn{nc: server, ids: make(map[string]struct{})}
+
+	srv.mu.Lock()
+	srv.conns[c] = struct{}{}
+	srv.mu.Unlock()
+
+	done := make(chan struct{})
+
+	go func() {
+		srv.reply(c, protocol.ClientResponse{Success: true, Result: json.RawMessage(`"` + strings.Repeat("p", 4*writeChunkSize) + `"`)})
+		close(done)
+	}()
+
+	if _, err := io.ReadFull(peer, make([]byte, 100)); err != nil {
+		t.Fatalf("read the first bytes: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reply() kept going after a stalled chunk")
+	}
+
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+
+	if !closed {
+		t.Error("client not closed after a partially written chunk timed out")
+	}
+
+	_ = peer.SetReadDeadline(time.Now().Add(time.Second))
+	if n, err := io.Copy(io.Discard, peer); err != nil || n != 0 {
+		t.Errorf("after the stall the client read %d more bytes (err = %v), want a clean EOF", n, err)
+	}
+}
+
+func TestServerRepliesToOneClientNeverInterleave(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer(&Options{Logger: log.New(io.Discard, "", 0), Version: testVersion})
+
+	server, peer := net.Pipe()
+	t.Cleanup(func() { _ = peer.Close(); _ = server.Close() })
+
+	c := &clientConn{nc: server, ids: make(map[string]struct{})}
+
+	var wg sync.WaitGroup
+
+	for _, ch := range []string{"a", "b"} {
+		wg.Go(func() {
+			srv.reply(c, protocol.ClientResponse{Success: true, Result: json.RawMessage(`"` + strings.Repeat(ch, 5*writeChunkSize) + `"`)})
+		})
+	}
+
+	r := bufio.NewReader(peer)
+	seen := map[string]bool{}
+
+	for range 2 {
+		line, err := r.ReadBytes('\n')
+		if err != nil {
+			t.Fatalf("read reply: %v", err)
+		}
+
+		var resp protocol.ClientResponse
+		if err := json.Unmarshal(line, &resp); err != nil {
+			t.Fatalf("reply is not one JSON line: %v", err)
+		}
+
+		body := strings.Trim(string(resp.Result), `"`)
+		if strings.Trim(body, body[:1]) != "" || len(body) != 5*writeChunkSize {
+			t.Fatalf("reply mixes two lines: %d bytes, starts with %q", len(body), body[:1])
+		}
+
+		seen[body[:1]] = true
+	}
+
+	wg.Wait()
+
+	if !seen["a"] || !seen["b"] {
+		t.Errorf("replies seen = %v, want both", seen)
+	}
+}
+
+// TestServerShutdownCutsLargeWrite guards the shutdown path against a client
+// that keeps reading a large reply slowly: every chunk makes progress, so no
+// deadline fires, and only closing the socket first ends the write.
+func TestServerShutdownCutsLargeWrite(t *testing.T) {
+	t.Parallel()
+
+	f := start(t, &options{})
+	c := f.dial()
+
+	c.sendCommand(t, "stopHar", nil)
+	cmd := f.ext.read(t)
+
+	writeFrame(t, f.stdin, []byte(fmt.Sprintf(`{"id":%q,"success":true,"result":%q}`, cmd.ID, strings.Repeat("z", 32<<20))))
+
+	reading := make(chan struct{})
+
+	go func() {
+		buf := make([]byte, 4096)
+		once := sync.OnceFunc(func() { close(reading) })
+
+		for {
+			if _, err := c.conn.Read(buf); err != nil {
+				return
+			}
+
+			once()
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	select {
+	case <-reading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reply never started")
+	}
+
+	began := time.Now()
+	f.cancel()
+
+	if err := f.wait(); err != nil {
+		t.Errorf("Run() = %v, want nil", err)
+	}
+
+	if elapsed := time.Since(began); elapsed > time.Second {
+		t.Errorf("shutdown took %s during a large write, want under a second", elapsed)
 	}
 }
 
@@ -1194,7 +1601,7 @@ func TestServerContinuesAfterAcceptError(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 
-	f := start(t, options{listener: &flakyListener{Listener: base}})
+	f := start(t, &options{listener: &flakyListener{Listener: base}})
 	f.sock = sock
 
 	waitFor(t, "accept error logged", func() bool {
@@ -1219,7 +1626,7 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errStdoutClosed }
 func TestServerStopsOnStdoutWriteError(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{stdout: failingWriter{}})
+	f := start(t, &options{stdout: failingWriter{}})
 	c := f.dial()
 
 	c.sendCommand(t, "ping", nil)
@@ -1233,7 +1640,7 @@ func TestServerStopsOnStdoutWriteError(t *testing.T) {
 func TestServerAnswerWriteErrorStopsServer(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{stdout: failingWriter{}})
+	f := start(t, &options{stdout: failingWriter{}})
 
 	f.ext.reply(t, &protocol.ExtensionMessage{ID: "ext-1", Command: "ping"})
 
@@ -1246,7 +1653,7 @@ func TestServerAnswerWriteErrorStopsServer(t *testing.T) {
 func TestServerLimitsConnections(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, options{maxConns: 1})
+	f := start(t, &options{maxConns: 1})
 
 	first := f.dial()
 	first.sendCommand(t, "ping", nil)
@@ -1449,6 +1856,30 @@ func shortTempDir(t *testing.T) string {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	return dir
+}
+
+func TestNewServerMaxInbound(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts *Options
+		want uint32
+	}{
+		{name: "nil options", opts: nil, want: nativemsg.MaxInbound},
+		{name: "unset", opts: &Options{}, want: nativemsg.MaxInbound},
+		{name: "explicit", opts: &Options{MaxInbound: 4096}, want: 4096},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := NewServer(tc.opts).maxInbound; got != tc.want {
+				t.Errorf("maxInbound = %d, want %d", got, tc.want)
+			}
+		})
+	}
 }
 
 func TestNewServerDefaultsNilLoggerToStderr(t *testing.T) {

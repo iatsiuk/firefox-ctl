@@ -23,6 +23,8 @@ type hostConfig struct {
 	stdin   io.Reader
 	stdout  io.Writer
 	logger  *log.Logger
+	// maxInbound overrides the extension frame cap; zero keeps the default
+	maxInbound uint32
 }
 
 func newHostCmd(opts *rootOptions) *cobra.Command {
@@ -65,7 +67,7 @@ func runHost(ctx context.Context, cfg hostConfig) error {
 		}
 	}()
 
-	srv := host.NewServer(&host.Options{Logger: cfg.logger, Version: version})
+	srv := host.NewServer(&host.Options{Logger: cfg.logger, Version: version, MaxInbound: cfg.maxInbound})
 
 	cfg.logger.Printf("listening on %s", path)
 

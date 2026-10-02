@@ -37,6 +37,9 @@ const (
 	DefaultWriteTimeout = 5 * time.Second
 )
 
+// writeChunkSize is the largest piece of a reply written under one deadline.
+const writeChunkSize = 64 * 1024
+
 // Client-facing error strings; docs/architecture.md pins them.
 const (
 	msgInvalidJSON    = "Invalid JSON"
@@ -59,6 +62,7 @@ type Options struct {
 	DrainTimeout   time.Duration
 	MaxConnections int
 	MaxRequestSize int
+	MaxInbound     uint32
 	NewID          func() string
 	AfterFunc      func(d time.Duration, f func()) (stop func())
 }
@@ -73,6 +77,7 @@ type Server struct {
 	drainTimeout   time.Duration
 	maxConns       int
 	maxRequestSize int
+	maxInbound     uint32
 	newID          func() string
 	afterFunc      func(d time.Duration, f func()) (stop func())
 
@@ -116,6 +121,7 @@ func NewServer(opts *Options) *Server {
 		drainTimeout:   opts.DrainTimeout,
 		maxConns:       opts.MaxConnections,
 		maxRequestSize: opts.MaxRequestSize,
+		maxInbound:     opts.MaxInbound,
 		newID:          opts.NewID,
 		afterFunc:      opts.AfterFunc,
 		fatal:          make(chan error, 1),
@@ -127,6 +133,21 @@ func NewServer(opts *Options) *Server {
 		s.log = log.New(os.Stderr, "[firefox-ctl-host] ", log.LstdFlags)
 	}
 
+	if s.newID == nil {
+		s.newID = newUUID
+	}
+
+	if s.afterFunc == nil {
+		s.afterFunc = defaultAfterFunc
+	}
+
+	s.applyLimits()
+
+	return s
+}
+
+// applyLimits fills the timing and size knobs left unset.
+func (s *Server) applyLimits() {
 	if s.idleTimeout == 0 {
 		s.idleTimeout = DefaultIdleTimeout
 	}
@@ -147,15 +168,9 @@ func NewServer(opts *Options) *Server {
 		s.maxRequestSize = MaxRequestSize
 	}
 
-	if s.newID == nil {
-		s.newID = newUUID
+	if s.maxInbound == 0 {
+		s.maxInbound = nativemsg.MaxInbound
 	}
-
-	if s.afterFunc == nil {
-		s.afterFunc = defaultAfterFunc
-	}
-
-	return s
 }
 
 func defaultAfterFunc(d time.Duration, f func()) func() {
@@ -448,7 +463,7 @@ func (s *Server) take(id string) *request {
 }
 
 func (s *Server) reply(c *clientConn, resp protocol.ClientResponse) {
-	line, err := json.Marshal(resp)
+	line, err := encodeLine(resp)
 	if err != nil {
 		s.log.Printf("marshal response: %v", err)
 
@@ -463,10 +478,7 @@ func (s *Server) reply(c *clientConn, resp protocol.ClientResponse) {
 		return
 	}
 
-	// bounds the write so a client that stopped reading can never wedge the
-	// single-threaded extension message pump or block shutdown indefinitely
-	_ = c.nc.SetWriteDeadline(time.Now().Add(s.writeTimeout))
-	_, writeErr := c.nc.Write(append(line, '\n'))
+	writeErr := writeLine(c.nc, line, s.writeTimeout)
 
 	c.mu.Unlock()
 
@@ -477,6 +489,64 @@ func (s *Server) reply(c *clientConn, resp protocol.ClientResponse) {
 		// so it stops holding a connection slot and its idle read loop.
 		s.closeClient(c)
 	}
+}
+
+// encodeLine renders resp as one NDJSON line that carries the result bytes as
+// the extension sent them. The encoder escapes <, >, & and U+2028 inside a raw
+// result, six bytes for each of a HAR body's, and SetEscapeHTML(false) leaves
+// U+2028 and U+2029 escaped; json.Compact keeps them, so the result is
+// spliced in after the envelope.
+func encodeLine(resp protocol.ClientResponse) ([]byte, error) {
+	result := resp.Result
+	resp.Result = nil
+
+	var line bytes.Buffer
+
+	line.Grow(len(result) + 64)
+
+	enc := json.NewEncoder(&line)
+	enc.SetEscapeHTML(false)
+
+	if err := enc.Encode(resp); err != nil {
+		return nil, fmt.Errorf("encode response: %w", err)
+	}
+
+	if len(result) == 0 {
+		return line.Bytes(), nil
+	}
+
+	// reopen the object Encode closed with "}\n"; success is never omitted,
+	// so the object already has a member and needs the comma
+	line.Truncate(line.Len() - 2)
+	line.WriteString(`,"result":`)
+
+	if err := json.Compact(&line, result); err != nil {
+		return nil, fmt.Errorf("compact result: %w", err)
+	}
+
+	line.WriteString("}\n")
+
+	return line.Bytes(), nil
+}
+
+// writeLine writes line in chunks, each under its own deadline: a client that
+// keeps reading gets a reply of any size, one that stalls for timeout is cut,
+// so it can never wedge the single-threaded extension message pump. A chunk
+// that times out half-written is a stall too, the line cannot be resumed.
+func writeLine(nc net.Conn, line []byte, timeout time.Duration) error {
+	for len(line) > 0 {
+		n := min(len(line), writeChunkSize)
+
+		_ = nc.SetWriteDeadline(time.Now().Add(timeout))
+
+		if _, err := nc.Write(line[:n]); err != nil {
+			return err
+		}
+
+		line = line[n:]
+	}
+
+	return nil
 }
 
 // closeClient drops every request the client still owns, so a disconnect never
@@ -499,11 +569,15 @@ func (s *Server) closeClient(c *clientConn) {
 	delete(s.conns, c)
 	s.mu.Unlock()
 
+	// closing first makes a reply blocked in Write fail at once and release
+	// c.mu; a slow reader that keeps up with every chunk deadline would
+	// otherwise hold shutdown until the whole reply is out
+	_ = c.nc.Close()
+
 	c.mu.Lock()
 	c.closed = true
 	c.mu.Unlock()
 
-	_ = c.nc.Close()
 	s.log.Printf("client disconnected")
 }
 
@@ -524,9 +598,12 @@ func (s *Server) closeClients() {
 	}
 }
 
-// readExtension pumps frames from stdin until EOF or a framing error.
+// readExtension pumps frames from stdin until EOF or a framing error. An
+// oversize frame has been read away by the time ErrTooLarge comes back, so the
+// framing is intact and the pump goes on; the reply it carried is lost and its
+// request times out. Replies to other clients wait while such a frame drains.
 func (s *Server) readExtension(stdin io.Reader) error {
-	r := nativemsg.NewReader(stdin)
+	r := nativemsg.NewReaderLimit(stdin, s.maxInbound)
 
 	for {
 		raw, err := r.Read()
@@ -536,6 +613,10 @@ func (s *Server) readExtension(stdin io.Reader) error {
 			s.log.Printf("extension disconnected (eof)")
 
 			return nil
+		case errors.Is(err, nativemsg.ErrTooLarge):
+			s.log.Printf("discarding extension message: %v", err)
+
+			continue
 		case err != nil:
 			return fmt.Errorf("read extension message: %w", err)
 		}
