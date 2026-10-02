@@ -7,17 +7,20 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
-import { start } from "../src/app"
+import { type AppHandle, start } from "../src/app"
+import type { HttpHeader, RequestBody, RequestDetails } from "../src/browser"
 import commandTable from "../src/commands.json"
 import { resetConsoleCapture } from "../src/content/console"
 import { realPage } from "../src/content/page"
 import { PAGE_COMMANDS } from "../src/handlers/dom"
+import { stopHarWithin } from "../src/handlers/har"
+import type { Har, HarEntry } from "../src/har"
 import { startPage } from "../src/page"
 import type { ExtensionResponse, HostCommand, JsonObject } from "../src/protocol"
 import { ERROR_CODES } from "../src/protocol"
 import { writeEvaluateEnabled } from "../src/settings"
 import { childWindow, fakePage, stubRect, stubTop } from "./dom"
-import { FakeBrowser, FakeEnvironment, type FakePort } from "./fakes"
+import { FakeBrowser, FakeEnvironment, type FakePort, type FakeStreamFilter } from "./fakes"
 import errors from "./fixtures/errors.json"
 
 /** The commands this plan delivers, as listed in its Overview. */
@@ -1174,5 +1177,316 @@ describe("a watched child frame", () => {
     expect(
       result(await run(port, "getContent", { selector: "#pan", frameId: FRAME_ID, tabId })),
     ).toMatchObject({ tabId, frameId: FRAME_ID, selector: "#pan" })
+  })
+})
+
+const HAR_TAB = 1
+const HAR_OTHER_TAB = 2
+const HTML_URL = "https://example.com/"
+
+interface HarSide {
+  browser: FakeBrowser
+  port: FakePort
+  handle: AppHandle
+  /** Moves the clock the event emitters stamp with. */
+  at(ms: number): void
+}
+
+/** A user window with the recorded tab and a second one, clocked by the test. */
+function harSession(): HarSide {
+  let clock = 1000
+  const browser = new FakeBrowser({ now: () => clock })
+  browser.addWindow({ id: 1, focused: true, type: "normal", incognito: false })
+  browser.addTab({ id: HAR_TAB, windowId: 1, url: "https://user.example/", active: true })
+  browser.addTab({ id: HAR_OTHER_TAB, windowId: 1, url: "https://other.example/" })
+  browser.currentWindowId = 1
+  browser.focusWindow(1)
+  const { handle, port } = session(browser)
+  return {
+    browser,
+    port,
+    handle,
+    at: (ms) => {
+      clock = ms
+    },
+  }
+}
+
+type HarRequest = Pick<RequestDetails, "requestId" | "url" | "method" | "type" | "tabId">
+
+function harRequest(overrides: Partial<HarRequest>): HarRequest {
+  return {
+    requestId: "r1",
+    url: "https://example.com/api",
+    method: "GET",
+    type: "xmlhttprequest",
+    tabId: HAR_TAB,
+    ...overrides,
+  }
+}
+
+function harFilter(browser: FakeBrowser, requestId: string): FakeStreamFilter {
+  const filter = browser.streamFilterFor(requestId)
+  if (filter === undefined) {
+    throw new Error(`no stream filter for ${requestId}`)
+  }
+  return filter
+}
+
+/**
+ * One request from onBeforeRequest to onCompleted, its body in `chunks`. The
+ * blocking onHeadersReceived of an https request is awaited, as Firefox does.
+ */
+async function harExchange(
+  side: HarSide,
+  base: HarRequest,
+  response: { status?: number; headers: HttpHeader[]; chunks?: (string | Uint8Array)[] },
+  requestBody?: RequestBody,
+  requestHeaders: HttpHeader[] = [],
+): Promise<void> {
+  const status = response.status ?? 200
+  void side.browser.emitRequestStarted(requestBody ? { ...base, requestBody } : base)
+  side.browser.emitSendHeaders({ ...base, requestHeaders })
+  await side.browser.emitHeadersReceived({
+    ...base,
+    statusCode: status,
+    statusLine: `HTTP/1.1 ${status} OK`,
+    responseHeaders: response.headers,
+  })
+  const filter = harFilter(side.browser, base.requestId)
+  filter.pushStart()
+  for (const chunk of response.chunks ?? []) {
+    filter.pushData(chunk)
+  }
+  filter.pushStop()
+  side.browser.emitRequestCompleted({ ...base, statusCode: status, ip: "192.0.2.1" })
+}
+
+async function stoppedHar(port: FakePort, params: JsonObject = { tabId: HAR_TAB }): Promise<Har> {
+  return result(await run(port, "stopHar", params)) as unknown as Har
+}
+
+function harEntry(har: Har, url: string, method = "GET"): HarEntry {
+  const found = har.log.entries.find((e) => e.request.url === url && e.request.method === method)
+  if (found === undefined) {
+    throw new Error(`no HAR entry for ${method} ${url}`)
+  }
+  return found
+}
+
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff])
+
+describe("a HAR recording through the port", () => {
+  test("startHar, traffic on the tab, stopHar answers a HAR 1.2 log", async () => {
+    const side = harSession()
+    const { browser, port } = side
+    expect(result(await run(port, "startHar", { tabId: HAR_TAB }))).toEqual({
+      tabId: HAR_TAB,
+      startedDateTime: new Date(1000).toISOString(),
+      maxBodySize: 10 * 1024 * 1024,
+    })
+
+    // a main_frame 301 to the HTML page, whose body arrives in two chunks
+    side.at(1100)
+    const redirect = harRequest({
+      requestId: "nav",
+      url: "http://example.com/",
+      type: "main_frame",
+    })
+    browser.emitBeforeNavigate({ tabId: HAR_TAB, frameId: 0, url: redirect.url })
+    void browser.emitRequestStarted(redirect)
+    const hopFilter = harFilter(browser, "nav")
+    void browser.emitHeadersReceived({
+      ...redirect,
+      statusCode: 301,
+      statusLine: "HTTP/1.1 301 Moved Permanently",
+      responseHeaders: [{ name: "Location", value: HTML_URL }],
+    })
+    browser.emitRedirect({ ...redirect, statusCode: 301, redirectUrl: HTML_URL })
+    hopFilter.pushError("Channel redirected")
+    side.at(1110)
+    await harExchange(
+      side,
+      { ...redirect, url: HTML_URL },
+      {
+        headers: [
+          { name: "Content-Type", value: "text/html; charset=utf-8" },
+          { name: "Set-Cookie", value: "sid=s3cret; Path=/; HttpOnly" },
+        ],
+        chunks: ["<html><body>Fish ", "&amp; <b>chips</b></body></html>"],
+      },
+    )
+    browser.emitCommitted({ tabId: HAR_TAB, frameId: 0, url: HTML_URL })
+
+    side.at(1200)
+    const form = harRequest({
+      requestId: "form",
+      url: "https://example.com/search",
+      method: "POST",
+    })
+    await harExchange(
+      side,
+      form,
+      { headers: [{ name: "Content-Type", value: "application/json" }], chunks: ["{}"] },
+      { formData: { q: ["fish & chips"], page: ["1"] } },
+      [{ name: "Content-Type", value: "application/x-www-form-urlencoded" }],
+    )
+    side.at(1300)
+    const upload = harRequest({
+      requestId: "upload",
+      url: "https://example.com/upload",
+      method: "POST",
+    })
+    await harExchange(
+      side,
+      upload,
+      { status: 204, headers: [] },
+      { formData: { name: ["Ann"], photo: ["photo.png"] } },
+      [{ name: "Content-Type", value: "multipart/form-data; boundary=x" }],
+    )
+    side.at(1400)
+    const image = harRequest({
+      requestId: "img",
+      url: "https://example.com/logo.png",
+      type: "image",
+    })
+    await harExchange(side, image, {
+      headers: [{ name: "Content-Type", value: "image/png" }],
+      chunks: [PNG],
+    })
+    side.at(1500)
+    const head = harRequest({ requestId: "head", url: "https://example.com/big", method: "HEAD" })
+    await harExchange(side, head, {
+      headers: [
+        { name: "Content-Type", value: "application/zip" },
+        { name: "Content-Length", value: "123456" },
+      ],
+    })
+    // an error after the response headers
+    side.at(1600)
+    const broken = harRequest({ requestId: "broken", url: "https://example.com/stream" })
+    void browser.emitRequestStarted(broken)
+    await browser.emitHeadersReceived({
+      ...broken,
+      statusCode: 200,
+      responseHeaders: [{ name: "Content-Type", value: "text/plain" }],
+    })
+    const brokenFilter = harFilter(browser, "broken")
+    brokenFilter.pushStart()
+    brokenFilter.pushData("par")
+    brokenFilter.pushError("NS_ERROR_NET_RESET")
+    browser.emitRequestFailed({ ...broken, error: "NS_ERROR_NET_RESET" })
+    // the other tab is not recorded
+    side.at(1700)
+    void browser.emitRequestStarted(
+      harRequest({ requestId: "other", url: "https://other.example/x", tabId: HAR_OTHER_TAB }),
+    )
+    browser.emitRequestCompleted(
+      harRequest({ requestId: "other", url: "https://other.example/x", tabId: HAR_OTHER_TAB }),
+    )
+
+    const har = await stoppedHar(port)
+    const { log } = har
+    expect(log.version).toBe("1.2")
+    expect(log.creator.name).toBe("firefox-ctl")
+    expect(log.entries.map((e) => `${e.request.method} ${e.request.url}`)).toEqual([
+      "GET http://example.com/",
+      `GET ${HTML_URL}`,
+      "POST https://example.com/search",
+      "POST https://example.com/upload",
+      "GET https://example.com/logo.png",
+      "HEAD https://example.com/big",
+      "GET https://example.com/stream",
+    ])
+    const pageIds = new Set(log.pages.map((p) => p.id))
+    for (const e of log.entries) {
+      expect(`${e.request.url} ${pageIds.has(e.pageref ?? "") ? "valid" : e.pageref}`).toBe(
+        `${e.request.url} valid`,
+      )
+    }
+
+    const hop = harEntry(har, "http://example.com/")
+    expect(hop.response.status).toBe(301)
+    expect(hop.response.redirectURL).toBe(HTML_URL)
+    expect(hop.response.content._bodyError).toBe("Channel redirected")
+    const page = harEntry(har, HTML_URL)
+    expect(page.response.content.text).toBe("<html><body>Fish &amp; <b>chips</b></body></html>")
+    expect(page.response.content.encoding).toBeUndefined()
+    expect(page.response.headers).toContainEqual({ name: "Set-Cookie", value: "[redacted]" })
+    expect(page.response.cookies.map((c) => [c.name, c.value])).toEqual([["sid", "[redacted]"]])
+    expect(JSON.stringify(har)).not.toContain("s3cret")
+
+    const search = harEntry(har, "https://example.com/search", "POST").request.postData
+    expect(search?.mimeType).toBe("application/x-www-form-urlencoded")
+    expect(search?.params).toEqual([
+      { name: "q", value: "fish & chips" },
+      { name: "page", value: "1" },
+    ])
+    expect(search?.text).toBeUndefined()
+    const multipart = harEntry(har, "https://example.com/upload", "POST").request.postData
+    expect(multipart?.params).toEqual([
+      { name: "name", value: "Ann" },
+      { name: "photo", value: "photo.png" },
+    ])
+    expect(multipart?.text).toBeUndefined()
+
+    const png = harEntry(har, "https://example.com/logo.png").response.content
+    expect(png.mimeType).toBe("image/png")
+    expect(png.encoding).toBe("base64")
+    expect(png.text).toBe(Buffer.from(PNG).toString("base64"))
+    expect(harEntry(har, "https://example.com/big", "HEAD").response.bodySize).toBe(0)
+    const failed = harEntry(har, "https://example.com/stream")
+    expect(failed.response.status).toBe(200)
+    expect(failed._error).toBe("NS_ERROR_NET_RESET")
+    expect(failed.response.content._bodyError).toBe("NS_ERROR_NET_RESET")
+    expect(log._recording).toMatchObject({ tabId: HAR_TAB, droppedBodies: 0, pendingEntries: 0 })
+    expect(await failure(port, "stopHar", { tabId: HAR_TAB })).toBe(
+      `HAR_NOT_RECORDING: no HAR recording on tab ${HAR_TAB}`,
+    )
+  })
+
+  test("a reply over the limit comes back with the largest bodies dropped", async () => {
+    const side = harSession()
+    side.handle.dispatcher.register("stopHar", stopHarWithin(16 * 1024))
+    expect((await run(side.port, "startHar", { tabId: HAR_TAB })).success).toBe(true)
+    const text = [{ name: "Content-Type", value: "text/plain" }]
+    await harExchange(side, harRequest({ requestId: "big", url: "https://example.com/big" }), {
+      headers: text,
+      chunks: ["a".repeat(32 * 1024)],
+    })
+    await harExchange(side, harRequest({ requestId: "small", url: "https://example.com/small" }), {
+      headers: text,
+      chunks: ["small body"],
+    })
+    const har = await stoppedHar(side.port)
+    const big = harEntry(har, "https://example.com/big").response.content
+    expect(big.text).toBeUndefined()
+    expect(big._bodyDropped).toBe(true)
+    expect(big.size).toBe(32 * 1024)
+    expect(harEntry(har, "https://example.com/small").response.content.text).toBe("small body")
+    expect(har.log._recording.droppedBodies).toBe(1)
+    expect(JSON.stringify(har).length).toBeLessThanOrEqual(16 * 1024)
+  })
+
+  test("stopHar while a request waits for headers answers, the late onstart lets go", async () => {
+    const side = harSession()
+    const { browser, port } = side
+    expect((await run(port, "startHar", { tabId: HAR_TAB })).success).toBe(true)
+    const slow = harRequest({ requestId: "slow", url: "https://example.com/slow" })
+    void browser.emitRequestStarted(slow)
+    const filter = harFilter(browser, "slow")
+
+    const har = await stoppedHar(port)
+    const entry = harEntry(har, "https://example.com/slow")
+    expect(entry._pending).toBe(true)
+    expect(entry.response.status).toBe(0)
+    expect(har.log._recording.pendingEntries).toBe(1)
+
+    await browser.emitHeadersReceived({ ...slow, statusCode: 200 })
+    filter.pushStart()
+    expect(filter.status).toBe("disconnected")
+    filter.pushData("late data")
+    expect(new TextDecoder().decode(filter.pageData())).toBe("late data")
+    expect(filter.written).toHaveLength(0)
   })
 })

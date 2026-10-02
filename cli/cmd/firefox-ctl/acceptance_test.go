@@ -537,3 +537,92 @@ func largeResult(size int) []byte {
 
 	return buf.Bytes()
 }
+
+// TestStopHarPrintsHarLiterally plays the extension answering stopHar with a
+// HAR whose body holds markup, and checks the CLI prints it as indented JSON
+// under one top-level "log" key, with < and & as they are, not as <.
+func TestStopHarPrintsHarLiterally(t *testing.T) {
+	t.Parallel()
+
+	socket := filepath.Join(shortTempDir(t), "firefox-ctl.sock")
+	signals := make(chan os.Signal, 1)
+	stdin, stdinWriter := io.Pipe()
+	stdoutReader, stdout := io.Pipe()
+
+	t.Cleanup(func() { _ = stdinWriter.Close(); _ = stdoutReader.Close() })
+
+	done := runHostAsync(t, hostConfig{
+		socket:  socket,
+		signals: signals,
+		stdin:   stdin,
+		stdout:  stdout,
+		logger:  discardLogger(),
+	})
+
+	waitForSocket(t, socket)
+
+	har := []byte(`{"log":{"version":"1.2","creator":{"name":"firefox-ctl","version":"1.0.0"},` +
+		`"pages":[],"entries":[{"request":{"method":"GET","url":"https://example.com/?a=1&b=2"},` +
+		`"response":{"status":200,"content":{"size":28,"mimeType":"text/html",` +
+		`"text":"<p>Fish &amp; chips</p> & <b>"}}}]}}`)
+
+	commands := make(chan protocol.HostCommand, 1)
+
+	go func() {
+		raw, err := nativemsg.NewReader(stdoutReader).Read()
+		if err != nil {
+			return
+		}
+
+		var cmd protocol.HostCommand
+		if err := json.Unmarshal(raw, &cmd); err != nil {
+			return
+		}
+
+		commands <- cmd
+
+		_, _ = stdinWriter.Write(rawFrame([]byte(fmt.Sprintf(`{"id":%q,"success":true,"result":%s}`, cmd.ID, har))))
+	}()
+
+	got, stderr, code := runBinary(t, "stopHar", "--tabId", "7", "--socket", socket)
+	if code != exitOK {
+		t.Fatalf("stopHar: exit %d, stderr %q", code, stderr)
+	}
+
+	cmd := <-commands
+	if cmd.Command != "stopHar" || cmd.Params["tabId"] != float64(7) {
+		t.Errorf("forwarded %q with %#v, want stopHar with tabId 7", cmd.Command, cmd.Params)
+	}
+
+	var want bytes.Buffer
+	if err := json.Indent(&want, har, "", "  "); err != nil {
+		t.Fatalf("indent input: %v", err)
+	}
+
+	want.WriteByte('\n')
+
+	if got != want.String() {
+		t.Errorf("stdout = %q, want %q", got, want.String())
+	}
+
+	for _, literal := range []string{`"text": "<p>Fish &amp; chips</p> & <b>"`, `?a=1&b=2`} {
+		if !strings.Contains(got, literal) {
+			t.Errorf("stdout lacks %q", literal)
+		}
+	}
+
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(got), &top); err != nil {
+		t.Fatalf("stdout is not JSON: %v", err)
+	}
+
+	if _, ok := top["log"]; !ok || len(top) != 1 {
+		t.Errorf("top-level keys of %v, want log only", top)
+	}
+
+	signals <- syscall.SIGTERM
+
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("runHost() error = %v, want nil", err)
+	}
+}
