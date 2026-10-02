@@ -35,7 +35,7 @@ export const SENSITIVE_HEADERS = [
 ]
 
 /** Stands in for a credential header value. */
-const REDACTED_HEADER = "[redacted]"
+export const REDACTED_HEADER = "[redacted]"
 
 /** Request types that block rendering. */
 const CRITICAL_TYPES = [

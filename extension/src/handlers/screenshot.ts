@@ -8,6 +8,7 @@ import type { TabLock } from "../capture-locks"
 import type { Handler, HandlerDeps } from "../dispatch"
 import type { JsonObject, JsonValue } from "../protocol"
 import { ExtensionError } from "../protocol"
+import { replyBytes } from "../reply"
 import { executeInTab } from "./dom"
 import { resolveTargetTab } from "./tabs"
 
@@ -39,10 +40,6 @@ const QUALITY_FLOOR = 20
 const SCALE_FACTOR = 0.75
 const SCALE_FLOOR = 0.25
 const MAX_STEPS = 8
-
-// the id the dispatcher will put in the envelope is a uuid, so a placeholder of
-// the same length measures the same frame
-const ENVELOPE_ID = "00000000-0000-0000-0000-000000000000"
 
 const NO_READINESS: JsonObject = { waitMs: 0, timedOut: false, timeline: [] }
 
@@ -157,12 +154,6 @@ function downgrade(current: Encoding): Encoding | null {
     return { ...current, scale }
   }
   return null
-}
-
-/** The bytes the dispatcher would put on the wire for this result. */
-function replyBytes(result: JsonObject): number {
-  const frame = JSON.stringify({ id: ENVELOPE_ID, success: true, result })
-  return new TextEncoder().encode(frame).length
 }
 
 /**

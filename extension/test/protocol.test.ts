@@ -224,6 +224,7 @@ describe("ExtensionError", () => {
       "EVALUATE_DISABLED",
       "AMBIGUOUS_TEXT",
       "FRAME_NOT_OBSERVED",
+      "HAR_TOO_LARGE",
     ])
     for (const code of ERROR_CODES) {
       expect(new ExtensionError(code, "text").message).toBe(`${code}: text`)

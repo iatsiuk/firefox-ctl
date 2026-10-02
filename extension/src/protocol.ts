@@ -130,6 +130,7 @@ export const ERROR_CODES = [
   "EVALUATE_DISABLED",
   "AMBIGUOUS_TEXT",
   "FRAME_NOT_OBSERVED",
+  "HAR_TOO_LARGE",
 ] as const
 
 export type ErrorCode = (typeof ERROR_CODES)[number]
