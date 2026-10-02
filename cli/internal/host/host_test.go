@@ -1615,7 +1615,8 @@ func TestServerShutdownCutsLargeWrite(t *testing.T) {
 
 	select {
 	case <-reading:
-	case <-time.After(5 * time.Second):
+	// decoding and encoding 32 MiB under -race takes seconds on a small CI runner
+	case <-time.After(30 * time.Second):
 		t.Fatal("the reply never started")
 	}
 
@@ -1683,7 +1684,8 @@ func TestServerShutdownSkipsReplyEncoding(t *testing.T) {
 func TestServerDeliversReplyBeforeStdinEOF(t *testing.T) {
 	t.Parallel()
 
-	f := start(t, &options{})
+	// the default drain is a second; encoding 4 MiB under -race on a busy CI runner can take longer
+	f := start(t, &options{drainTimeout: 30 * time.Second})
 	c := f.dial()
 
 	c.sendCommand(t, "stopHar", nil)

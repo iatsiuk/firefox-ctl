@@ -415,7 +415,8 @@ func TestHostStopsOnSignalDuringLargeWrite(t *testing.T) {
 
 	select {
 	case <-reading:
-	case <-time.After(10 * time.Second):
+	// decoding and encoding 32 MiB under -race takes seconds on a small CI runner
+	case <-time.After(30 * time.Second):
 		t.Fatal("the reply never started")
 	}
 
