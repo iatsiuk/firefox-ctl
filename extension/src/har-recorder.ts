@@ -15,12 +15,19 @@ import type {
   RequestFilter,
   ResponseDetails,
   SendHeadersDetails,
+  StreamFilter,
   UploadData,
   WebRequestEvent,
   WebRequestFilterEvent,
 } from "./browser"
 import type { Environment } from "./env"
-import type { HarRecording, HopRecord, PageRecord, RequestBodyShape } from "./har"
+import type {
+  HarRecording,
+  HopRecord,
+  PageRecord,
+  RequestBodyShape,
+  ResponseBodyRecord,
+} from "./har"
 import { contentType, postData } from "./har"
 import { ExtensionError } from "./protocol"
 import { utf8Length } from "./reply"
@@ -62,6 +69,7 @@ interface Hop {
 }
 
 interface Recording {
+  browser: Browser
   tabId: number
   start: number
   maxBodySize: number
@@ -75,6 +83,10 @@ interface Recording {
   /** The page each top-level navigation request opened or bound to. */
   navigations: Map<string, Page>
   release: (() => void)[]
+  /** Every stream filter opened, released by status at stop. */
+  filters: StreamFilter[]
+  /** Set by stop: late filter callbacks no longer touch the data. */
+  stopped: boolean
 }
 
 const ALL_URLS = ["<all_urls>"]
@@ -124,6 +136,7 @@ export class HarRecorder {
     }
     const start = this.env.now()
     const recording: Recording = {
+      browser,
       tabId,
       start,
       maxBodySize: options.maxBodySize,
@@ -142,6 +155,8 @@ export class HarRecorder {
       current: new Map(),
       navigations: new Map(),
       release: [],
+      filters: [],
+      stopped: false,
     }
     listen(browser, recording, this.hopListeners(recording))
     this.recordings.set(tabId, recording)
@@ -156,6 +171,7 @@ export class HarRecorder {
     }
     this.recordings.delete(tabId)
     release(recording)
+    releaseFilters(recording)
     return {
       tabId,
       start: recording.start,
@@ -328,8 +344,88 @@ function beforeRequest(recording: Recording, details: RequestDetails): void {
   if (capture && details.requestBody !== undefined) {
     storeBody(recording, hop, details.requestBody)
   }
+  if (capture) {
+    captureResponse(recording, hop.record)
+  }
   recording.hops.push(hop)
   recording.current.set(details.requestId, hop)
+}
+
+/**
+ * Opens a stream filter on the hop's response unless the budget is spent. Its
+ * callbacks close over the hop, so a late error of a redirected hop ends that
+ * hop's body only. Every chunk is written through before anything else.
+ */
+function captureResponse(recording: Recording, hop: HopRecord): void {
+  if (recording.budget <= 0) {
+    hop.bodyDropped = true
+    return
+  }
+  const body: ResponseBodyRecord = { chunks: [], complete: false }
+  hop.body = body
+  let filter: StreamFilter
+  try {
+    filter = recording.browser.webRequest.filterResponseData(hop.requestId)
+  } catch (error) {
+    body.error = error instanceof Error ? error.message : String(error)
+    return
+  }
+  recording.filters.push(filter)
+  let stored = 0
+  filter.ondata = (event) => {
+    filter.write(event.data)
+    if (recording.stopped) {
+      return
+    }
+    const length = Math.min(recording.maxBodySize - stored, recording.budget, event.data.byteLength)
+    if (length > 0) {
+      body.chunks.push(new Uint8Array(event.data.slice(0, length)))
+      stored += length
+      recording.budget -= length
+    }
+    // past the cap the page gets the rest straight from the channel
+    if (length < event.data.byteLength) {
+      body.truncated = true
+      filter.disconnect()
+    }
+  }
+  filter.onstop = () => {
+    filter.close()
+    if (!recording.stopped) {
+      body.complete = true
+    }
+  }
+  filter.onerror = () => {
+    if (!recording.stopped) {
+      body.error = filter.error
+    }
+  }
+}
+
+/**
+ * Lets the page have every filter's data without the recorder: a started
+ * filter disconnects now, one before onstart on its onstart, a terminal one
+ * needs nothing and would throw.
+ */
+function releaseFilters(recording: Recording): void {
+  recording.stopped = true
+  for (const filter of recording.filters.splice(0)) {
+    switch (filter.status) {
+      case "transferringdata":
+      case "suspended":
+      case "finishedtransferringdata":
+        filter.disconnect()
+        break
+      case "uninitialized":
+        filter.onstart = () => filter.disconnect()
+        filter.ondata = null
+        filter.onstop = null
+        filter.onerror = null
+        break
+      default:
+        break
+    }
+  }
 }
 
 /**

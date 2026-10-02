@@ -8,7 +8,7 @@ import type { RequestBody, RequestDetails } from "../src/browser"
 import type { HarEntry, HarRecording } from "../src/har"
 import { buildLog } from "../src/har"
 import { HarRecorder, type StartOptions } from "../src/har-recorder"
-import { FakeBrowser, FakeEnvironment } from "./fakes"
+import { FakeBrowser, FakeEnvironment, type FakeStreamFilter } from "./fakes"
 
 const TAB_ID = 1
 const OTHER_TAB_ID = 2
@@ -706,5 +706,327 @@ describe("HarRecorder tab close", () => {
     h.recorder.attach(h.browser)
     expect(h.browser.tabsRemoved.listeners).toHaveLength(removals)
     expect(h.browser.navigationsStarted.listeners).toHaveLength(navigations)
+  })
+})
+
+function text(data: Uint8Array): string {
+  return new TextDecoder().decode(data)
+}
+
+/** The stream filter of the request's latest hop. */
+function filterOf(h: Harness, requestId = "r1"): FakeStreamFilter {
+  const filter = h.browser.streamFilterFor(requestId)
+  if (filter === undefined) {
+    throw new Error(`no stream filter for ${requestId}`)
+  }
+  return filter
+}
+
+/** onBeforeRequest and text/plain response headers. */
+function textRequest(h: Harness, base: Base): void {
+  void h.browser.emitRequestStarted(base)
+  void h.browser.emitHeadersReceived({
+    ...base,
+    responseHeaders: [header("Content-Type", "text/plain")],
+  })
+}
+
+/** A text response whose body arrives in the given chunks, through onCompleted. */
+function respond(h: Harness, base: Base, ...chunks: string[]): FakeStreamFilter {
+  textRequest(h, base)
+  const filter = filterOf(h, base.requestId)
+  filter.pushStart()
+  for (const chunk of chunks) {
+    filter.pushData(chunk)
+  }
+  filter.pushStop()
+  h.browser.emitRequestCompleted(base)
+  return filter
+}
+
+describe("HarRecorder response bodies", () => {
+  test("every hop gets a stream filter from the blocking onBeforeRequest", () => {
+    const h = harness()
+    h.start()
+    const first = req({ url: "http://example.com/", type: "main_frame" })
+    void h.browser.emitRequestStarted(first)
+    h.browser.emitRedirect({ ...first, statusCode: 301, redirectUrl: "https://example.com/" })
+    void h.browser.emitRequestStarted({ ...first, url: "https://example.com/" })
+    void h.browser.emitRequestStarted(req({ requestId: "r2" }))
+    expect(h.browser.streamFilters.map((entry) => entry.requestId)).toEqual(["r1", "r1", "r2"])
+  })
+
+  test("maxBodySize 0 opens no stream filter", () => {
+    const h = harness()
+    h.start({ maxBodySize: 0 })
+    textRequest(h, req())
+    h.browser.emitRequestCompleted(req())
+    expect(h.browser.streamFilters).toHaveLength(0)
+    const [entry] = h.entries()
+    expect(entry?.response.content).toEqual({ size: 0, mimeType: "text/plain" })
+  })
+
+  test("every chunk is written through unchanged and in order, then stored", () => {
+    const h = harness()
+    h.start()
+    const filter = respond(h, req(), "ab", "cd", "ef")
+    expect(filter.written.map(text)).toEqual(["ab", "cd", "ef"])
+    expect(text(filter.pageData())).toBe("abcdef")
+    expect(filter.status).toBe("closed")
+    const [entry] = h.entries()
+    expect(entry?.response.content).toEqual({ size: 6, mimeType: "text/plain", text: "abcdef" })
+  })
+
+  test("a chunk the filter cannot write is never stored", () => {
+    const h = harness()
+    h.start()
+    textRequest(h, req())
+    const filter = filterOf(h)
+    filter.pushStart()
+    filter.pushData("ab")
+    const write = filter.write.bind(filter)
+    filter.write = () => {
+      throw new Error("NS_ERROR_FAILURE")
+    }
+    expect(() => filter.pushData("cd")).toThrow("NS_ERROR_FAILURE")
+    filter.write = write
+    filter.pushData("ef")
+    filter.pushStop()
+    expect(h.entries()[0]?.response.content.text).toBe("abef")
+  })
+
+  test("binary bodies are stored byte for byte", () => {
+    const h = harness()
+    h.start()
+    void h.browser.emitRequestStarted(req())
+    void h.browser.emitHeadersReceived({
+      ...req(),
+      responseHeaders: [header("Content-Type", "image/png")],
+    })
+    const filter = filterOf(h)
+    filter.pushStart()
+    filter.pushData(new Uint8Array([0x89, 0x50, 0x00, 0xff]))
+    filter.pushStop()
+    h.browser.emitRequestCompleted(req())
+    const content = h.entries()[0]?.response.content
+    expect(content?.encoding).toBe("base64")
+    expect(content?.text).toBe("iVAA/w==")
+  })
+
+  test("a late onerror of a redirected hop ends that hop's body only", () => {
+    const h = harness()
+    h.start()
+    const first = req({ url: "http://example.com/", type: "main_frame" })
+    void h.browser.emitRequestStarted(first)
+    const old = filterOf(h)
+    h.browser.emitRedirect({ ...first, statusCode: 301, redirectUrl: "https://example.com/" })
+    const second = { ...first, url: "https://example.com/" }
+    textRequest(h, second)
+    const current = filterOf(h)
+    current.pushStart()
+    current.pushData("he")
+    old.pushError("Channel redirected")
+    current.pushData("llo")
+    current.pushStop()
+    h.browser.emitRequestCompleted(second)
+    const [redirect, final] = h.entries()
+    expect(redirect?.response.content._bodyError).toBe("Channel redirected")
+    expect(final?.response.content._bodyError).toBeUndefined()
+    expect(final?.response.content.text).toBe("hello")
+    expect(final?.response.content._complete).toBeUndefined()
+  })
+})
+
+describe("HarRecorder response body limits", () => {
+  test("a body past maxBodySize keeps exactly maxBodySize bytes and lets go", () => {
+    const h = harness()
+    h.start({ maxBodySize: 4 })
+    textRequest(h, req())
+    const filter = filterOf(h)
+    filter.pushStart()
+    filter.pushData("ab")
+    filter.pushData("cdef")
+    expect(filter.status).toBe("disconnected")
+    filter.pushData("gh")
+    filter.pushStop()
+    h.browser.emitRequestCompleted(req())
+    expect(filter.written.map(text)).toEqual(["ab", "cdef"])
+    expect(text(filter.pageData())).toBe("abcdefgh")
+    const content = h.entries()[0]?.response.content
+    expect(content?.text).toBe("abcd")
+    expect(content?._truncated).toBe(true)
+    expect(content?._complete).toBe(false)
+  })
+
+  test("a body of exactly maxBodySize bytes is complete", () => {
+    const h = harness()
+    h.start({ maxBodySize: 4 })
+    const filter = respond(h, req(), "ab", "cd")
+    expect(filter.status).toBe("closed")
+    const content = h.entries()[0]?.response.content
+    expect(content?.text).toBe("abcd")
+    expect(content?._truncated).toBeUndefined()
+  })
+
+  test("the recording budget cuts the response crossing it and drops the later ones", () => {
+    const h = harness()
+    h.start({ maxBodySize: 4, bodyBudget: 6 })
+    respond(h, req({ requestId: "r1" }), "abcd")
+    const crossing = respond(h, req({ requestId: "r2" }), "wxyz")
+    void h.browser.emitRequestStarted(req({ requestId: "r3" }))
+    expect(h.browser.streamFilterFor("r3")).toBeUndefined()
+    expect(crossing.status).toBe("disconnected")
+    expect(text(crossing.pageData())).toBe("wxyz")
+    const [first, second, third] = h.entries().map((entry) => entry.response.content)
+    expect(first?.text).toBe("abcd")
+    expect(second?.text).toBe("wx")
+    expect(second?._truncated).toBe(true)
+    expect(third?._bodyDropped).toBe(true)
+    expect(third?.text).toBeUndefined()
+  })
+
+  test("request bodies spend the budget responses share", () => {
+    const h = harness()
+    h.start({ maxBodySize: 4, bodyBudget: 4 })
+    void h.browser.emitRequestStarted({ ...req(), method: "POST", requestBody: rawBody("abcd") })
+    expect(h.browser.streamFilters).toHaveLength(0)
+    expect(h.entries()[0]?.response.content._bodyDropped).toBe(true)
+  })
+})
+
+describe("HarRecorder response body errors", () => {
+  test("onerror records _bodyError and keeps the entry", () => {
+    const h = harness()
+    h.start()
+    void h.browser.emitRequestStarted(req())
+    void h.browser.emitHeadersReceived({ ...req(), statusCode: 200 })
+    const filter = filterOf(h)
+    filter.pushStart()
+    filter.pushData("ab")
+    filter.pushError("NS_ERROR_NET_RESET")
+    h.browser.emitRequestFailed({ ...req(), error: "NS_ERROR_NET_RESET" })
+    const [entry] = h.entries()
+    expect(entry?.response.status).toBe(200)
+    expect(entry?._error).toBe("NS_ERROR_NET_RESET")
+    expect(entry?.response.content._bodyError).toBe("NS_ERROR_NET_RESET")
+    expect(entry?.response.content._complete).toBe(false)
+  })
+
+  test("filterResponseData throwing records _bodyError and the request goes on", async () => {
+    const h = harness()
+    h.start()
+    h.browser.failFilterResponseData = "Invalid request ID"
+    expect(await h.browser.emitRequestStarted(req())).toEqual([undefined])
+    h.browser.emitRequestCompleted(req())
+    const [entry] = h.entries()
+    expect(entry?.response.status).toBe(200)
+    expect(entry?.response.content._bodyError).toBe("Invalid request ID")
+  })
+
+  test("cached alternative data ending the filter is recorded as a body error", () => {
+    const h = harness()
+    h.start()
+    void h.browser.emitRequestStarted(req({ type: "script" }))
+    const filter = filterOf(h)
+    filter.pushStart()
+    filter.pushError("Channel is delivering cached alt-data")
+    h.browser.emitRequestCompleted(req({ type: "script" }))
+    const content = h.entries()[0]?.response.content
+    expect(content?._bodyError).toBe("Channel is delivering cached alt-data")
+  })
+})
+
+describe("HarRecorder stream filter release", () => {
+  test("stop disconnects a started filter at once", () => {
+    const h = harness()
+    h.start()
+    textRequest(h, req())
+    const filter = filterOf(h)
+    filter.pushStart()
+    filter.pushData("ab")
+    const recording = h.stop()
+    expect(filter.status).toBe("disconnected")
+    filter.pushData("cd")
+    filter.pushStop()
+    expect(text(filter.pageData())).toBe("abcd")
+    const content = buildLog(recording).log.entries[0]?.response.content
+    expect(content?.text).toBe("ab")
+    expect(content?._complete).toBe(false)
+  })
+
+  test("a filter before onstart disconnects on its onstart and stays out of the recording", () => {
+    const h = harness()
+    h.start()
+    void h.browser.emitRequestStarted(req())
+    const filter = filterOf(h)
+    const recording = h.stop()
+    expect(filter.status).toBe("uninitialized")
+    filter.pushStart()
+    expect(filter.status).toBe("disconnected")
+    filter.pushData("ab")
+    expect(text(filter.pageData())).toBe("ab")
+    expect(filter.written).toHaveLength(0)
+    expect(recording.hops[0]?.body).toEqual({ chunks: [], complete: false })
+  })
+
+  test("terminal filters are left alone", () => {
+    const h = harness()
+    h.start({ maxBodySize: 2 })
+    const closed = respond(h, req({ requestId: "r1" }), "ab")
+    const cut = respond(h, req({ requestId: "r2" }), "abc")
+    void h.browser.emitRequestStarted(req({ requestId: "r3" }))
+    const failed = filterOf(h, "r3")
+    failed.pushError("NS_ERROR_ABORT")
+    expect(() => h.stop()).not.toThrow()
+    expect([closed.status, cut.status, failed.status]).toEqual(["closed", "disconnected", "failed"])
+  })
+
+  test("a second stop throws HAR_NOT_RECORDING and leaves the filter alone", () => {
+    const h = harness()
+    h.start()
+    void h.browser.emitRequestStarted(req())
+    const filter = filterOf(h)
+    h.stop()
+    expect(() => h.stop()).toThrow("HAR_NOT_RECORDING")
+    filter.pushStart()
+    filter.pushData("ab")
+    expect(filter.status).toBe("disconnected")
+    expect(text(filter.pageData())).toBe("ab")
+  })
+
+  test("a tab closed while a filter waits for onstart still lets the page through", () => {
+    const h = harness()
+    h.start()
+    void h.browser.emitRequestStarted(req())
+    const filter = filterOf(h)
+    h.browser.removeTab(TAB_ID)
+    const recording = h.stop()
+    expect(() => filter.pushStart()).not.toThrow()
+    filter.pushData("ab")
+    expect(text(filter.pageData())).toBe("ab")
+    expect(recording.hops[0]?.body?.chunks).toHaveLength(0)
+  })
+
+  test("a body error after stop never reaches the finished recording", () => {
+    const h = harness()
+    h.start()
+    const first = req({ url: "http://example.com/", type: "main_frame" })
+    void h.browser.emitRequestStarted(first)
+    const old = filterOf(h)
+    h.browser.emitRedirect({ ...first, statusCode: 301, redirectUrl: "https://example.com/" })
+    const recording = h.stop()
+    expect(() => old.pushError("Channel redirected")).not.toThrow()
+    expect(recording.hops[0]?.body?.error).toBeUndefined()
+  })
+
+  test("a body error of a closed tab before stop is recorded", () => {
+    const h = harness()
+    h.start()
+    void h.browser.emitRequestStarted(req())
+    const filter = filterOf(h)
+    filter.pushStart()
+    h.browser.removeTab(TAB_ID)
+    filter.pushError("NS_BINDING_ABORTED")
+    expect(h.entries()[0]?.response.content._bodyError).toBe("NS_BINDING_ABORTED")
   })
 })
