@@ -3,12 +3,22 @@ import { describe, expect, test } from "bun:test"
 import type {
   Browser,
   CookieSetDetails,
+  ErrorDetails,
   FrameNavigationDetails,
+  HeadersReceivedDetails,
+  HttpHeader,
   MessageSender,
+  RedirectDetails,
+  RequestBody,
+  RequestDetails,
+  ResponseDetails,
+  SecurityInfo,
+  SendHeadersDetails,
   SendMessageOptions,
+  WebRequestEvent,
 } from "../src/browser"
 import type { Environment } from "../src/env"
-import { FakeBrowser, FakeEnvironment, FakePort } from "./fakes"
+import { FakeBrowser, FakeEnvironment, FakePort, type FakeStreamFilter } from "./fakes"
 
 describe("FakePort", () => {
   test("records posted frames in order", () => {
@@ -1083,5 +1093,578 @@ describe("FakeBrowser.cookies", () => {
     expect(normal.tabs?.[0]?.cookieStoreId).toBe("firefox-default")
     expect(incognito.tabs?.[0]?.cookieStoreId).toBe("firefox-private")
     expect(tab.cookieStoreId).toBe("firefox-private")
+  })
+})
+
+function request(overrides: Partial<RequestDetails> = {}): Omit<RequestDetails, "timeStamp"> {
+  return {
+    requestId: "r1",
+    url: "https://example.com/",
+    method: "GET",
+    type: "main_frame",
+    tabId: 1,
+    frameId: 0,
+    ...overrides,
+  }
+}
+
+describe("FakeBrowser.webRequest delivery", () => {
+  test("delivers only to listeners whose filter tab matches or has no tab", () => {
+    const browser = new FakeBrowser()
+    const seen: string[] = []
+    browser.webRequest.onBeforeRequest.addListener(
+      () => {
+        seen.push("any")
+        return undefined
+      },
+      { urls: ["<all_urls>"] },
+    )
+    browser.webRequest.onBeforeRequest.addListener(
+      () => {
+        seen.push("tab 1")
+        return undefined
+      },
+      { urls: ["<all_urls>"], tabId: 1 },
+    )
+    browser.webRequest.onBeforeRequest.addListener(
+      () => {
+        seen.push("tab 2")
+        return undefined
+      },
+      { urls: ["<all_urls>"], tabId: 2 },
+    )
+
+    browser.emitRequestStarted(request({ tabId: 1 }))
+    browser.emitRequestStarted(request({ tabId: -1 }))
+
+    expect(seen).toEqual(["any", "tab 1", "any"])
+  })
+
+  test("removeListener stops delivery on every event", () => {
+    const browser = new FakeBrowser()
+    const seen: string[] = []
+    const filter = { urls: ["<all_urls>"], tabId: 1 }
+    const sent = (details: SendHeadersDetails) => {
+      seen.push(`sent ${details.requestId}`)
+    }
+    const received = (details: HeadersReceivedDetails) => {
+      seen.push(`received ${details.requestId}`)
+      return undefined
+    }
+    const started = (details: ResponseDetails) => {
+      seen.push(`started ${details.requestId}`)
+    }
+    const redirected = (details: RedirectDetails) => {
+      seen.push(`redirected ${details.requestId}`)
+    }
+    const failed = (details: ErrorDetails) => {
+      seen.push(`failed ${details.requestId}`)
+    }
+    browser.webRequest.onSendHeaders.addListener(sent, filter)
+    browser.webRequest.onHeadersReceived.addListener(received, filter)
+    browser.webRequest.onResponseStarted.addListener(started, filter)
+    browser.webRequest.onBeforeRedirect.addListener(redirected, filter)
+    browser.webRequest.onErrorOccurred.addListener(failed, filter)
+
+    const emitAll = (requestId: string) => {
+      browser.emitSendHeaders(request({ requestId }))
+      browser.emitHeadersReceived(request({ requestId }))
+      browser.emitResponseStarted(request({ requestId }))
+      browser.emitRedirect({ ...request({ requestId }), redirectUrl: "https://example.com/b" })
+      browser.emitRequestFailed({ ...request({ requestId }), error: "NS_BINDING_ABORTED" })
+    }
+    emitAll("a")
+    browser.webRequest.onSendHeaders.removeListener(sent)
+    browser.webRequest.onHeadersReceived.removeListener(received)
+    browser.webRequest.onResponseStarted.removeListener(started)
+    browser.webRequest.onBeforeRedirect.removeListener(redirected)
+    browser.webRequest.onErrorOccurred.removeListener(failed)
+    emitAll("b")
+
+    expect(seen).toEqual(["sent a", "received a", "started a", "redirected a", "failed a"])
+    expect(browser.webRequest.onSendHeaders.hasListener(sent)).toBe(false)
+  })
+
+  test("each event accepts only the extraInfoSpec values Firefox accepts", () => {
+    const browser = new FakeBrowser()
+    const filter = { urls: ["<all_urls>"] }
+    const noop = () => undefined
+    const accepted: [string, WebRequestEvent<() => undefined>, string[]][] = [
+      ["onBeforeRequest", browser.webRequest.onBeforeRequest, ["blocking", "requestBody"]],
+      ["onSendHeaders", browser.webRequest.onSendHeaders, ["requestHeaders"]],
+      ["onHeadersReceived", browser.webRequest.onHeadersReceived, ["blocking", "responseHeaders"]],
+      ["onResponseStarted", browser.webRequest.onResponseStarted, ["responseHeaders"]],
+      ["onBeforeRedirect", browser.webRequest.onBeforeRedirect, ["responseHeaders"]],
+      ["onCompleted", browser.webRequest.onCompleted, ["responseHeaders"]],
+    ]
+    for (const [name, event, specs] of accepted) {
+      expect(() => event.addListener(noop, filter, specs)).not.toThrow()
+      expect(() => event.addListener(noop, filter, [])).not.toThrow()
+      expect(() => event.addListener(noop, filter)).not.toThrow()
+      for (const wrong of ["requestBody", "requestHeaders", "responseHeaders", "blocking"]) {
+        if (specs.includes(wrong)) {
+          continue
+        }
+        expect(() => event.addListener(noop, filter, [wrong])).toThrow(
+          `Invalid enumeration value "${wrong}") for webRequest.${name}.addListener`,
+        )
+      }
+      expect(() => event.addListener(noop, filter, ["extraHeaders"])).toThrow(
+        "Invalid enumeration value",
+      )
+    }
+  })
+
+  test("onErrorOccurred accepts no extraInfoSpec at all", () => {
+    const browser = new FakeBrowser()
+    const failed = browser.webRequest.onErrorOccurred as WebRequestEvent<() => void>
+    const filter = { urls: ["<all_urls>"] }
+
+    expect(() => failed.addListener(() => {}, filter, [])).toThrow(
+      "Incorrect argument types for webRequest.onErrorOccurred.addListener.",
+    )
+    expect(() => failed.addListener(() => {}, filter)).not.toThrow()
+  })
+
+  test("a rejected addListener registers nothing", () => {
+    const browser = new FakeBrowser()
+
+    expect(() =>
+      browser.webRequest.onSendHeaders.addListener(() => {}, { urls: ["<all_urls>"] }, [
+        "blocking",
+      ]),
+    ).toThrow()
+
+    expect(browser.headersSent.listeners).toHaveLength(0)
+  })
+
+  test("optional details reach only listeners that asked for them", () => {
+    const browser = new FakeBrowser()
+    const filter = { urls: ["<all_urls>"] }
+    const bodies: (RequestBody | undefined)[] = []
+    const requestHeaders: (HttpHeader[] | undefined)[] = []
+    const responseHeaders: (HttpHeader[] | undefined)[] = []
+    for (const spec of [["requestBody"], []]) {
+      browser.webRequest.onBeforeRequest.addListener(
+        (details) => {
+          bodies.push(details.requestBody)
+          return undefined
+        },
+        filter,
+        spec,
+      )
+    }
+    for (const spec of [["requestHeaders"], []]) {
+      browser.webRequest.onSendHeaders.addListener(
+        (details) => {
+          requestHeaders.push(details.requestHeaders)
+        },
+        filter,
+        spec,
+      )
+    }
+    for (const spec of [["responseHeaders"], []]) {
+      browser.webRequest.onCompleted.addListener(
+        (details) => {
+          responseHeaders.push(details.responseHeaders)
+        },
+        filter,
+        spec,
+      )
+    }
+    const body: RequestBody = { formData: { a: ["1"] } }
+    const headers = [{ name: "X-A", value: "1" }]
+
+    browser.emitRequestStarted(request({ requestBody: body }))
+    browser.emitSendHeaders({ ...request(), requestHeaders: headers })
+    browser.emitRequestCompleted({ ...request(), responseHeaders: headers })
+
+    expect(bodies).toEqual([body, undefined])
+    expect(requestHeaders).toEqual([headers, undefined])
+    expect(responseHeaders).toEqual([headers, undefined])
+  })
+
+  test("emitters default timeStamp to the fake clock and fill response fields", () => {
+    let clock = 1000
+    const browser = new FakeBrowser({ now: () => clock })
+    const filter = { urls: ["<all_urls>"] }
+    const stamps: number[] = []
+    const responses: ResponseDetails[] = []
+    const redirects: RedirectDetails[] = []
+    browser.webRequest.onBeforeRequest.addListener((details) => {
+      stamps.push(details.timeStamp)
+      return undefined
+    }, filter)
+    browser.webRequest.onSendHeaders.addListener((details) => {
+      stamps.push(details.timeStamp)
+    }, filter)
+    browser.webRequest.onHeadersReceived.addListener((details) => {
+      stamps.push(details.timeStamp)
+      return undefined
+    }, filter)
+    browser.webRequest.onResponseStarted.addListener((details) => {
+      responses.push(details)
+    }, filter)
+    browser.webRequest.onBeforeRedirect.addListener((details) => {
+      redirects.push(details)
+    }, filter)
+    browser.webRequest.onErrorOccurred.addListener((details) => {
+      stamps.push(details.timeStamp)
+    }, filter)
+
+    browser.emitRequestStarted(request())
+    clock = 1005
+    browser.emitSendHeaders(request())
+    clock = 1010
+    browser.emitHeadersReceived(request())
+    browser.emitResponseStarted(request())
+    browser.emitRedirect({ ...request(), redirectUrl: "https://example.com/b" })
+    browser.emitRequestFailed({ ...request(), error: "x", timeStamp: 7 })
+
+    expect(stamps).toEqual([1000, 1005, 1010, 7])
+    expect(responses[0]).toMatchObject({
+      timeStamp: 1010,
+      statusCode: 200,
+      statusLine: "HTTP/1.1 200",
+      fromCache: false,
+    })
+    expect(redirects[0]).toMatchObject({
+      statusCode: 302,
+      statusLine: "HTTP/1.1 302",
+      redirectUrl: "https://example.com/b",
+      fromCache: false,
+    })
+  })
+
+  test("an emitter awaits a blocking listener's promise before it resolves", async () => {
+    const browser = new FakeBrowser()
+    const filter = { urls: ["<all_urls>"] }
+    let release: (() => void) | undefined
+    browser.webRequest.onHeadersReceived.addListener(
+      () =>
+        new Promise<undefined>((resolve) => {
+          release = () => resolve(undefined)
+        }),
+      filter,
+      ["blocking"],
+    )
+    browser.webRequest.onBeforeRequest.addListener(
+      () => Promise.resolve({ cancel: true }),
+      filter,
+      ["blocking"],
+    )
+
+    let settled = false
+    const emitted = browser.emitHeadersReceived(request()).then((results) => {
+      settled = true
+      return results
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    release?.()
+
+    expect(await emitted).toEqual([undefined])
+    expect(await browser.emitRequestStarted(request())).toEqual([{ cancel: true }])
+  })
+
+  test("a non-blocking listener's return value is not awaited", async () => {
+    const browser = new FakeBrowser()
+    browser.webRequest.onBeforeRequest.addListener(() => new Promise<undefined>(() => {}), {
+      urls: ["<all_urls>"],
+    })
+
+    expect(await browser.emitRequestStarted(request())).toEqual([])
+  })
+})
+
+describe("FakeStreamFilter", () => {
+  test("follows the public status values through a full transfer", () => {
+    const browser = new FakeBrowser()
+    const filter = browser.webRequest.filterResponseData("r1")
+    const events: string[] = []
+    filter.onstart = () => events.push(`start ${filter.status}`)
+    filter.ondata = (event) => {
+      events.push(`data ${new TextDecoder().decode(event.data)}`)
+      filter.write(event.data)
+    }
+    filter.onstop = () => {
+      events.push(`stop ${filter.status}`)
+      filter.close()
+    }
+    const fake = browser.streamFilterFor("r1") as FakeStreamFilter
+
+    expect(filter.status).toBe("uninitialized")
+    fake.pushStart()
+    fake.pushData("ab")
+    fake.pushData("cd")
+    fake.pushStop()
+
+    expect(events).toEqual([
+      "start transferringdata",
+      "data ab",
+      "data cd",
+      "stop finishedtransferringdata",
+    ])
+    expect(filter.status).toBe("closed")
+    expect(fake.written.map((chunk) => new TextDecoder().decode(chunk))).toEqual(["ab", "cd"])
+    expect(new TextDecoder().decode(fake.pageData())).toBe("abcd")
+  })
+
+  test("an error moves the filter to failed with its message", () => {
+    const browser = new FakeBrowser()
+    const filter = browser.webRequest.filterResponseData("r1")
+    const errors: string[] = []
+    filter.onerror = () => errors.push(`${filter.status} ${filter.error}`)
+
+    browser.streamFilterFor("r1")?.pushError("Channel redirected")
+
+    expect(errors).toEqual(["failed Channel redirected"])
+  })
+
+  test("disconnect passes later data straight to the page", () => {
+    const browser = new FakeBrowser()
+    const filter = browser.webRequest.filterResponseData("r1")
+    const seen: string[] = []
+    filter.ondata = (event) => {
+      seen.push(new TextDecoder().decode(event.data))
+      filter.write(event.data)
+      filter.disconnect()
+    }
+    const fake = browser.streamFilterFor("r1") as FakeStreamFilter
+
+    fake.pushStart()
+    fake.pushData("ab")
+    fake.pushData("cd")
+    fake.pushStop()
+
+    expect(filter.status).toBe("disconnected")
+    expect(seen).toEqual(["ab"])
+    expect(new TextDecoder().decode(fake.pageData())).toBe("abcd")
+    expect(() => filter.disconnect()).not.toThrow()
+  })
+
+  test("disconnect throws before onstart, after close and after an error", () => {
+    const browser = new FakeBrowser()
+    const early = browser.webRequest.filterResponseData("early")
+    const closed = browser.webRequest.filterResponseData("closed")
+    const failed = browser.webRequest.filterResponseData("failed")
+    browser.streamFilterFor("closed")?.pushStart()
+    closed.close()
+    browser.streamFilterFor("failed")?.pushError("boom")
+
+    expect(() => early.disconnect()).toThrow("NS_ERROR_FAILURE")
+    expect(() => closed.disconnect()).toThrow("NS_ERROR_FAILURE")
+    expect(() => failed.disconnect()).toThrow("NS_ERROR_FAILURE")
+  })
+
+  test("disconnect works while transferring and after the stop", () => {
+    const browser = new FakeBrowser()
+    const transferring = browser.webRequest.filterResponseData("a")
+    const finished = browser.webRequest.filterResponseData("b")
+    browser.streamFilterFor("a")?.pushStart()
+    browser.streamFilterFor("b")?.pushStart()
+    browser.streamFilterFor("b")?.pushStop()
+
+    transferring.disconnect()
+    finished.disconnect()
+
+    expect(transferring.status).toBe("disconnected")
+    expect(finished.status).toBe("disconnected")
+  })
+
+  test("write and close throw where Firefox throws", () => {
+    const browser = new FakeBrowser()
+    const filter = browser.webRequest.filterResponseData("r1")
+
+    expect(() => filter.write(new Uint8Array([1]))).toThrow("NS_ERROR_FAILURE")
+    expect(() => filter.close()).toThrow("NS_ERROR_FAILURE")
+    browser.streamFilterFor("r1")?.pushStart()
+    filter.write(new Uint8Array([1]))
+    filter.close()
+    expect(() => filter.close()).not.toThrow()
+    expect(() => filter.write(new Uint8Array([2]))).toThrow("NS_ERROR_FAILURE")
+    expect(browser.streamFilterFor("r1")?.written).toEqual([new Uint8Array([1])])
+  })
+
+  test("a written chunk is a copy of what the listener passed", () => {
+    const browser = new FakeBrowser()
+    const filter = browser.webRequest.filterResponseData("r1")
+    browser.streamFilterFor("r1")?.pushStart()
+    const chunk = new Uint8Array([1, 2])
+
+    filter.write(chunk)
+    chunk[0] = 9
+
+    expect(browser.streamFilterFor("r1")?.written).toEqual([new Uint8Array([1, 2])])
+  })
+
+  test("data after close or an error never reaches the listener", () => {
+    const browser = new FakeBrowser()
+    const filter = browser.webRequest.filterResponseData("r1")
+    const seen: number[] = []
+    filter.ondata = (event) => seen.push(event.data.byteLength)
+    const fake = browser.streamFilterFor("r1") as FakeStreamFilter
+    fake.pushStart()
+    filter.close()
+
+    fake.pushData("late")
+    fake.pushStop()
+    fake.pushError("late")
+
+    expect(seen).toEqual([])
+    expect(filter.status).toBe("closed")
+  })
+
+  test("filterResponseData records every filter and can be scripted to throw", () => {
+    const browser = new FakeBrowser()
+    browser.webRequest.filterResponseData("r1")
+    browser.webRequest.filterResponseData("r1")
+
+    expect(browser.streamFilters.map((entry) => entry.requestId)).toEqual(["r1", "r1"])
+    expect(browser.streamFilterFor("r1")).toBe(browser.streamFilters[1]?.filter)
+    browser.failFilterResponseData = "Invalid request ID"
+    expect(() => browser.webRequest.filterResponseData("r2")).toThrow("Invalid request ID")
+    expect(browser.streamFilters).toHaveLength(2)
+  })
+})
+
+describe("FakeBrowser.webRequest.getSecurityInfo", () => {
+  const info: SecurityInfo = {
+    state: "secure",
+    protocolVersion: "TLSv1.3",
+    certificates: [],
+  }
+
+  test("answers the scripted value inside a pending blocking onHeadersReceived", async () => {
+    const browser = new FakeBrowser()
+    browser.securityInfo = info
+    const answers: (SecurityInfo | undefined)[] = []
+    browser.webRequest.onHeadersReceived.addListener(
+      async (details) => {
+        answers.push(await browser.webRequest.getSecurityInfo(details.requestId, {}))
+        return undefined
+      },
+      { urls: ["<all_urls>"] },
+      ["blocking"],
+    )
+
+    await browser.emitHeadersReceived(request({ requestId: "r7" }))
+
+    expect(answers).toEqual([info])
+    expect(browser.securityInfoCalls).toEqual([{ requestId: "r7", options: {}, blocking: true }])
+  })
+
+  test("records a call after the blocking window and answers undefined", async () => {
+    const browser = new FakeBrowser()
+    browser.securityInfo = info
+    const pending: Promise<SecurityInfo | undefined>[] = []
+    browser.webRequest.onHeadersReceived.addListener(
+      (details) => {
+        pending.push(
+          Promise.resolve().then(() => browser.webRequest.getSecurityInfo(details.requestId, {})),
+        )
+        return undefined
+      },
+      { urls: ["<all_urls>"] },
+      ["blocking"],
+    )
+
+    await browser.emitHeadersReceived(request())
+
+    expect(await pending[0]).toBeUndefined()
+    expect(browser.securityInfoCalls[0]?.blocking).toBe(false)
+  })
+
+  test("a non-blocking listener does not open the window", async () => {
+    const browser = new FakeBrowser()
+    browser.securityInfo = info
+    let answer: Promise<SecurityInfo | undefined> | undefined
+    browser.webRequest.onHeadersReceived.addListener(
+      (details) => {
+        answer = browser.webRequest.getSecurityInfo(details.requestId, {})
+        return undefined
+      },
+      { urls: ["<all_urls>"] },
+    )
+
+    await browser.emitHeadersReceived(request())
+
+    expect(await answer).toBeUndefined()
+    expect(browser.securityInfoCalls[0]?.blocking).toBe(false)
+  })
+
+  test("rejects with a scripted error", async () => {
+    const browser = new FakeBrowser()
+    browser.securityInfo = new Error("no security info")
+    let answer: Promise<SecurityInfo | undefined> | undefined
+    browser.webRequest.onHeadersReceived.addListener(
+      (details) => {
+        answer = browser.webRequest.getSecurityInfo(details.requestId, {})
+        return answer.then(() => undefined).catch(() => undefined)
+      },
+      { urls: ["<all_urls>"] },
+      ["blocking"],
+    )
+
+    await browser.emitHeadersReceived(request())
+
+    await expect(answer as Promise<unknown>).rejects.toThrow("no security info")
+  })
+
+  test("the window belongs to the request that is blocked", async () => {
+    const browser = new FakeBrowser()
+    browser.securityInfo = info
+    let other: Promise<SecurityInfo | undefined> | undefined
+    browser.webRequest.onHeadersReceived.addListener(
+      async () => {
+        other = browser.webRequest.getSecurityInfo("other", {})
+        return undefined
+      },
+      { urls: ["<all_urls>"] },
+      ["blocking"],
+    )
+
+    await browser.emitHeadersReceived(request())
+
+    expect(await other).toBeUndefined()
+  })
+})
+
+describe("FakeBrowser.webNavigation lifecycle", () => {
+  test("emits onBeforeNavigate, onCommitted and onCompleted with the fake clock", () => {
+    const browser = new FakeBrowser({ now: () => 42 })
+    const seen: string[] = []
+    const before = (details: FrameNavigationDetails) =>
+      seen.push(`before ${details.frameId} ${details.timeStamp}`)
+    browser.webNavigation.onBeforeNavigate.addListener(before)
+    browser.webNavigation.onCommitted.addListener((details) =>
+      seen.push(`committed ${details.url} ${details.timeStamp}`),
+    )
+    browser.webNavigation.onDOMContentLoaded.addListener((details) =>
+      seen.push(`loaded ${details.timeStamp}`),
+    )
+    browser.webNavigation.onCompleted.addListener((details) =>
+      seen.push(`completed ${details.parentFrameId} ${details.timeStamp}`),
+    )
+
+    browser.emitBeforeNavigate({ tabId: 1, frameId: 0, url: "https://example.com/" })
+    browser.emitCommitted({ tabId: 1, frameId: 0, url: "https://example.com/", timeStamp: 50 })
+    browser.emitFrameLoaded({ tabId: 1, frameId: 0, url: "https://example.com/" })
+    browser.emitNavigationCompleted({
+      tabId: 1,
+      frameId: 0,
+      parentFrameId: -1,
+      url: "https://example.com/",
+    })
+    browser.webNavigation.onBeforeNavigate.removeListener(before)
+    browser.emitBeforeNavigate({ tabId: 1, frameId: 0, url: "https://example.com/" })
+
+    expect(seen).toEqual([
+      "before 0 42",
+      "committed https://example.com/ 50",
+      "loaded 42",
+      "completed -1 42",
+    ])
   })
 })

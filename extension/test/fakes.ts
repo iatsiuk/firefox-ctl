@@ -1,4 +1,6 @@
 import type {
+  BlockingListener,
+  BlockingResponse,
   Browser,
   CaptureOptions,
   CompletedDetails,
@@ -12,18 +14,27 @@ import type {
   ExecuteScriptDetails,
   Extension,
   FrameNavigationDetails,
+  HeadersReceivedDetails,
   Manifest,
   MessageListener,
   MessageSender,
   PartitionKey,
   Port,
   PortError,
+  RedirectDetails,
   RequestDetails,
   RequestFilter,
+  ResponseDetails,
   Runtime,
+  SecurityInfo,
+  SecurityInfoOptions,
+  SendHeadersDetails,
   SendMessageOptions,
   Storage,
   StorageArea,
+  StreamFilter,
+  StreamFilterDataEvent,
+  StreamFilterStatus,
   Tab,
   TabActiveInfo,
   TabChangeInfo,
@@ -72,34 +83,258 @@ export class FakeEvent<F> implements Event<F> {
   }
 }
 
-export class FakeWebRequestEvent<F> implements WebRequestEvent<F> {
-  readonly listeners: F[] = []
-  readonly filters: RequestFilter[] = []
-  readonly extraInfoSpecs: (string[] | undefined)[] = []
+// the optional details Firefox adds only for a listener that asked for them
+const OPTIONAL_DETAILS = ["requestBody", "requestHeaders", "responseHeaders"] as const
+
+interface WebRequestRegistration<F> {
+  listener: F
+  filter: RequestFilter
+  extraInfoSpec?: string[]
+}
+
+/**
+ * A webRequest event with the Firefox listener contract: an extraInfoSpec
+ * value the event does not accept throws (`accepted` null: no extraInfoSpec
+ * at all), delivery honours the filter tabId, optional details reach only
+ * listeners that asked for them, and the promise of a "blocking" listener is
+ * awaited by the emitter.
+ */
+export class FakeWebRequestEvent<F extends (details: never) => unknown>
+  implements WebRequestEvent<F>
+{
+  private readonly registrations: WebRequestRegistration<F>[] = []
+  private readonly blocked = new Map<string, number>()
+
+  constructor(
+    private readonly name: string,
+    private readonly accepted: readonly string[] | null,
+  ) {}
+
+  get listeners(): F[] {
+    return this.registrations.map((registration) => registration.listener)
+  }
+
+  get filters(): RequestFilter[] {
+    return this.registrations.map((registration) => registration.filter)
+  }
+
+  get extraInfoSpecs(): (string[] | undefined)[] {
+    return this.registrations.map((registration) => registration.extraInfoSpec)
+  }
 
   addListener(listener: F, filter: RequestFilter, extraInfoSpec?: string[]): void {
-    this.listeners.push(listener)
-    this.filters.push(filter)
-    this.extraInfoSpecs.push(extraInfoSpec)
+    this.validate(extraInfoSpec)
+    this.registrations.push({ listener, filter, extraInfoSpec })
   }
 
   removeListener(listener: F): void {
-    const index = this.listeners.indexOf(listener)
+    const index = this.registrations.findIndex((registration) => registration.listener === listener)
     if (index >= 0) {
-      this.listeners.splice(index, 1)
-      this.filters.splice(index, 1)
-      this.extraInfoSpecs.splice(index, 1)
+      this.registrations.splice(index, 1)
     }
   }
 
   hasListener(listener: F): boolean {
-    return this.listeners.includes(listener)
+    return this.registrations.some((registration) => registration.listener === listener)
   }
 
   snapshot(): F[] {
-    return [...this.listeners]
+    return this.listeners
+  }
+
+  // true while a blocking listener runs or its promise is pending for the request
+  isBlocking(requestId: string): boolean {
+    return (this.blocked.get(requestId) ?? 0) > 0
+  }
+
+  // calls every matching listener synchronously; the promise settles once
+  // every blocking listener's answer has
+  deliver(details: RequestDetails): Promise<unknown[]> {
+    const answers: unknown[] = []
+    for (const registration of [...this.registrations]) {
+      const tabId = registration.filter.tabId
+      if (tabId !== undefined && tabId !== details.tabId) {
+        continue
+      }
+      const blocking = registration.extraInfoSpec?.includes("blocking") ?? false
+      const call = registration.listener as unknown as (details: unknown) => unknown
+      if (!blocking) {
+        call(this.visible(details, registration))
+        continue
+      }
+      answers.push(this.block(details.requestId, () => call(this.visible(details, registration))))
+    }
+    return Promise.all(answers)
+  }
+
+  private block(requestId: string, call: () => unknown): Promise<unknown> {
+    this.blocked.set(requestId, (this.blocked.get(requestId) ?? 0) + 1)
+    const release = () => this.blocked.set(requestId, (this.blocked.get(requestId) ?? 1) - 1)
+    let answer: unknown
+    try {
+      answer = call()
+    } catch (error) {
+      release()
+      throw error
+    }
+    // a plain answer releases the request at once, as Firefox does
+    if (!(answer instanceof Promise)) {
+      release()
+      return Promise.resolve(answer)
+    }
+    return answer.finally(release)
+  }
+
+  private visible(details: object, registration: WebRequestRegistration<F>): object {
+    const copy: Record<string, unknown> = { ...details }
+    for (const key of OPTIONAL_DETAILS) {
+      if (this.accepted?.includes(key) && !registration.extraInfoSpec?.includes(key)) {
+        delete copy[key]
+      }
+    }
+    return copy
+  }
+
+  // the messages of the Firefox schema validation
+  private validate(extraInfoSpec: string[] | undefined): void {
+    if (extraInfoSpec === undefined) {
+      return
+    }
+    if (this.accepted === null) {
+      throw new Error(`Incorrect argument types for webRequest.${this.name}.addListener.`)
+    }
+    extraInfoSpec.forEach((value, index) => {
+      if (!this.accepted?.includes(value)) {
+        throw new Error(
+          `Type error for parameter extraInfoSpec (Error processing ${index}: Invalid enumeration value "${value}") for webRequest.${this.name}.addListener.`,
+        )
+      }
+    })
   }
 }
+
+// what StreamFilterChild throws for a call its state does not allow
+const STREAM_FILTER_FAILURE = "NS_ERROR_FAILURE"
+
+const STREAM_FILTER_OPEN: readonly StreamFilterStatus[] = [
+  "transferringdata",
+  "finishedtransferringdata",
+  "suspended",
+]
+
+function bytesOf(data: ArrayBuffer | Uint8Array | string): Uint8Array {
+  if (typeof data === "string") {
+    return new TextEncoder().encode(data)
+  }
+  return data instanceof Uint8Array ? data.slice() : new Uint8Array(data.slice(0))
+}
+
+/**
+ * A response stream filter with the states of StreamFilterChild.cpp. The test
+ * drives the channel side with push*; the recorder uses the StreamFilter side.
+ * `pageData` is what the page receives: every write, and once disconnected,
+ * the data that bypasses the filter.
+ */
+export class FakeStreamFilter implements StreamFilter {
+  status: StreamFilterStatus = "uninitialized"
+  error = ""
+  onstart: (() => void) | null = null
+  ondata: ((event: StreamFilterDataEvent) => void) | null = null
+  onstop: (() => void) | null = null
+  onerror: (() => void) | null = null
+  readonly written: Uint8Array[] = []
+  private readonly page: Uint8Array[] = []
+
+  constructor(readonly requestId: string) {}
+
+  write(data: ArrayBuffer | Uint8Array): void {
+    if (!STREAM_FILTER_OPEN.includes(this.status)) {
+      throw new Error(STREAM_FILTER_FAILURE)
+    }
+    const chunk = bytesOf(data)
+    this.written.push(chunk)
+    this.page.push(chunk)
+  }
+
+  close(): void {
+    if (this.status === "closed") {
+      return
+    }
+    if (!STREAM_FILTER_OPEN.includes(this.status)) {
+      throw new Error(STREAM_FILTER_FAILURE)
+    }
+    this.status = "closed"
+  }
+
+  disconnect(): void {
+    if (this.status === "disconnected") {
+      return
+    }
+    if (!STREAM_FILTER_OPEN.includes(this.status)) {
+      throw new Error(STREAM_FILTER_FAILURE)
+    }
+    this.status = "disconnected"
+  }
+
+  pushStart(): void {
+    if (this.status !== "uninitialized") {
+      throw new Error(`fake stream filter: start in ${this.status}`)
+    }
+    this.status = "transferringdata"
+    this.onstart?.()
+  }
+
+  pushData(data: ArrayBuffer | Uint8Array | string): void {
+    if (this.status === "uninitialized") {
+      throw new Error("fake stream filter: data before start")
+    }
+    if (this.status === "disconnected") {
+      this.page.push(bytesOf(data))
+      return
+    }
+    if (this.status !== "transferringdata") {
+      return
+    }
+    const chunk = bytesOf(data)
+    this.ondata?.({ data: chunk.buffer as ArrayBuffer })
+  }
+
+  pushStop(): void {
+    if (this.status !== "transferringdata") {
+      return
+    }
+    this.status = "finishedtransferringdata"
+    this.onstop?.()
+  }
+
+  pushError(message: string): void {
+    if (this.status === "closed" || this.status === "disconnected" || this.status === "failed") {
+      return
+    }
+    this.status = "failed"
+    this.error = message
+    this.onerror?.()
+  }
+
+  pageData(): Uint8Array {
+    const total = this.page.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+    const joined = new Uint8Array(total)
+    let offset = 0
+    for (const chunk of this.page) {
+      joined.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    return joined
+  }
+}
+
+// an emitter fills in what the test does not care about
+type Emitted<D> = Omit<D, "timeStamp" | "frameId"> &
+  Partial<Pick<RequestDetails, "timeStamp" | "frameId">>
+type EmittedResponse<D> = Omit<Emitted<D>, "statusCode" | "statusLine" | "fromCache"> &
+  Partial<Pick<ResponseDetails, "statusCode" | "statusLine" | "fromCache">>
+type EmittedNavigation = Omit<FrameNavigationDetails, "parentFrameId" | "timeStamp"> &
+  Partial<Pick<FrameNavigationDetails, "parentFrameId" | "timeStamp">>
 
 export interface FakePortOptions {
   name?: string
@@ -157,6 +392,8 @@ export interface FakeBrowserOptions {
   // Firefox below 138 has neither tabs.group nor tabGroups
   tabGroups?: boolean
   allowedIncognitoAccess?: boolean
+  // the clock event emitters default timeStamp to
+  now?: () => number
 }
 
 const DEFAULT_GEOMETRY = { width: 1280, height: 800, left: 0, top: 0 }
@@ -519,16 +756,50 @@ export class FakeBrowser implements Browser {
   readonly executeScriptCalls: { tabId: number; details: ExecuteScriptDetails }[] = []
   readonly runtimeMessages = new FakeEvent<MessageListener>()
   readonly runtimeConnections = new FakeEvent<(port: Port) => void>()
+  readonly navigationsStarted = new FakeEvent<(details: FrameNavigationDetails) => void>()
+  readonly navigationsCommitted = new FakeEvent<(details: FrameNavigationDetails) => void>()
   readonly framesLoaded = new FakeEvent<(details: FrameNavigationDetails) => void>()
+  readonly navigationsCompleted = new FakeEvent<(details: FrameNavigationDetails) => void>()
   readonly tabsRemoved = new FakeEvent<(tabId: number, removeInfo: TabRemoveInfo) => void>()
   readonly tabsUpdated = new FakeEvent<
     (tabId: number, changeInfo: TabChangeInfo, tab: Tab) => void
   >()
   readonly tabsActivated = new FakeEvent<(activeInfo: TabActiveInfo) => void>()
   readonly windowsRemoved = new FakeEvent<(windowId: number) => void>()
-  readonly requestsStarted = new FakeWebRequestEvent<(details: RequestDetails) => void>()
-  readonly requestsCompleted = new FakeWebRequestEvent<(details: CompletedDetails) => void>()
-  readonly requestsFailed = new FakeWebRequestEvent<(details: ErrorDetails) => void>()
+  readonly requestsStarted = new FakeWebRequestEvent<BlockingListener<RequestDetails>>(
+    "onBeforeRequest",
+    ["blocking", "requestBody"],
+  )
+  readonly headersSent = new FakeWebRequestEvent<(details: SendHeadersDetails) => void>(
+    "onSendHeaders",
+    ["requestHeaders"],
+  )
+  readonly headersReceived = new FakeWebRequestEvent<BlockingListener<HeadersReceivedDetails>>(
+    "onHeadersReceived",
+    ["blocking", "responseHeaders"],
+  )
+  readonly responsesStarted = new FakeWebRequestEvent<(details: ResponseDetails) => void>(
+    "onResponseStarted",
+    ["responseHeaders"],
+  )
+  readonly requestsRedirected = new FakeWebRequestEvent<(details: RedirectDetails) => void>(
+    "onBeforeRedirect",
+    ["responseHeaders"],
+  )
+  readonly requestsCompleted = new FakeWebRequestEvent<(details: CompletedDetails) => void>(
+    "onCompleted",
+    ["responseHeaders"],
+  )
+  readonly requestsFailed = new FakeWebRequestEvent<(details: ErrorDetails) => void>(
+    "onErrorOccurred",
+    null,
+  )
+  readonly streamFilters: { requestId: string; filter: FakeStreamFilter }[] = []
+  readonly securityInfoCalls: {
+    requestId: string
+    options: SecurityInfoOptions
+    blocking: boolean
+  }[] = []
   readonly captures: { tabId: number; options?: CaptureOptions }[] = []
 
   // set to make connectNative throw the way Firefox does for a missing manifest
@@ -546,6 +817,12 @@ export class FakeBrowser implements Browser {
   // content side sets it so the background can admit the port it opens
   connectSender?: MessageSender
   captureHandler?: (tabId: number, options?: CaptureOptions) => Promise<string>
+  // set to make filterResponseData throw
+  failFilterResponseData?: string
+  // what getSecurityInfo answers inside a blocking onHeadersReceived; an
+  // Error rejects
+  securityInfo: SecurityInfo | Error = { state: "insecure", certificates: [] }
+  now: () => number
   currentWindowId = 1
   allowedIncognitoAccess: boolean
 
@@ -562,6 +839,7 @@ export class FakeBrowser implements Browser {
   constructor(options: FakeBrowserOptions = {}) {
     this.manifest = { version: options.manifestVersion ?? "0.1.0" }
     this.allowedIncognitoAccess = options.allowedIncognitoAccess ?? true
+    this.now = options.now ?? (() => 0)
     for (const tab of options.tabs ?? []) {
       this.addTab(tab)
     }
@@ -604,10 +882,22 @@ export class FakeBrowser implements Browser {
     this.storage = { local: this.localStorageArea() }
     this.webRequest = {
       onBeforeRequest: this.requestsStarted,
+      onSendHeaders: this.headersSent,
+      onHeadersReceived: this.headersReceived,
+      onResponseStarted: this.responsesStarted,
+      onBeforeRedirect: this.requestsRedirected,
       onCompleted: this.requestsCompleted,
       onErrorOccurred: this.requestsFailed,
+      filterResponseData: (requestId) => this.filterResponseData(requestId),
+      getSecurityInfo: (requestId, securityOptions) =>
+        this.getSecurityInfo(requestId, securityOptions),
     }
-    this.webNavigation = { onDOMContentLoaded: this.framesLoaded }
+    this.webNavigation = {
+      onBeforeNavigate: this.navigationsStarted,
+      onCommitted: this.navigationsCommitted,
+      onDOMContentLoaded: this.framesLoaded,
+      onCompleted: this.navigationsCompleted,
+    }
     this.cookies = {
       getAll: (query) => this.cookieJar.getAll(query),
       set: (details) => this.cookieJar.set(details),
@@ -679,25 +969,47 @@ export class FakeBrowser implements Browser {
     }
   }
 
-  emitRequestStarted(details: RequestDetails): void {
-    for (const listener of this.requestsStarted.snapshot()) {
-      listener(details)
-    }
+  // the promise resolves to the answers of the blocking listeners
+  emitRequestStarted(details: Emitted<RequestDetails>): Promise<(BlockingResponse | undefined)[]> {
+    return this.requestsStarted.deliver(this.stamped(details)) as Promise<
+      (BlockingResponse | undefined)[]
+    >
   }
 
-  emitRequestCompleted(
-    details: Omit<CompletedDetails, "statusCode"> & { statusCode?: number },
-  ): void {
-    const completed: CompletedDetails = { statusCode: 200, ...details }
-    for (const listener of this.requestsCompleted.snapshot()) {
-      listener(completed)
-    }
+  emitSendHeaders(details: Emitted<SendHeadersDetails>): void {
+    void this.headersSent.deliver(this.stamped(details))
   }
 
-  emitRequestFailed(details: ErrorDetails): void {
-    for (const listener of this.requestsFailed.snapshot()) {
-      listener(details)
+  emitHeadersReceived(
+    details: EmittedResponse<HeadersReceivedDetails>,
+  ): Promise<(BlockingResponse | undefined)[]> {
+    const { fromCache, ...rest } = details
+    const received: HeadersReceivedDetails = this.response(rest, 200)
+    if (fromCache !== undefined) {
+      received.fromCache = fromCache
     }
+    return this.headersReceived.deliver(received) as Promise<(BlockingResponse | undefined)[]>
+  }
+
+  emitResponseStarted(details: EmittedResponse<ResponseDetails>): void {
+    void this.responsesStarted.deliver({ fromCache: false, ...this.response(details, 200) })
+  }
+
+  emitRedirect(details: EmittedResponse<RedirectDetails>): void {
+    void this.requestsRedirected.deliver({ fromCache: false, ...this.response(details, 302) })
+  }
+
+  emitRequestCompleted(details: EmittedResponse<CompletedDetails>): void {
+    void this.requestsCompleted.deliver({ fromCache: false, ...this.response(details, 200) })
+  }
+
+  emitRequestFailed(details: Emitted<ErrorDetails>): void {
+    void this.requestsFailed.deliver(this.stamped(details))
+  }
+
+  // the last filter created for the request
+  streamFilterFor(requestId: string): FakeStreamFilter | undefined {
+    return this.streamFilters.filter((entry) => entry.requestId === requestId).at(-1)?.filter
   }
 
   addWindow(window: Window): void {
@@ -741,14 +1053,72 @@ export class FakeBrowser implements Browser {
     }
   }
 
-  emitFrameLoaded(
-    details: Omit<FrameNavigationDetails, "parentFrameId" | "timeStamp"> &
-      Partial<Pick<FrameNavigationDetails, "parentFrameId" | "timeStamp">>,
+  emitBeforeNavigate(details: EmittedNavigation): void {
+    this.navigate(this.navigationsStarted, details)
+  }
+
+  emitCommitted(details: EmittedNavigation): void {
+    this.navigate(this.navigationsCommitted, details)
+  }
+
+  emitFrameLoaded(details: EmittedNavigation): void {
+    this.navigate(this.framesLoaded, details)
+  }
+
+  emitNavigationCompleted(details: EmittedNavigation): void {
+    this.navigate(this.navigationsCompleted, details)
+  }
+
+  private navigate(
+    event: FakeEvent<(details: FrameNavigationDetails) => void>,
+    details: EmittedNavigation,
   ): void {
-    const loaded: FrameNavigationDetails = { parentFrameId: 0, timeStamp: 0, ...details }
-    for (const listener of this.framesLoaded.snapshot()) {
-      listener(loaded)
+    const stamped: FrameNavigationDetails = { parentFrameId: 0, timeStamp: this.now(), ...details }
+    for (const listener of event.snapshot()) {
+      listener(stamped)
     }
+  }
+
+  private stamped<D extends object>(details: D): D & Pick<RequestDetails, "timeStamp" | "frameId"> {
+    return { frameId: 0, timeStamp: this.now(), ...details }
+  }
+
+  private response<D extends EmittedResponse<HeadersReceivedDetails>>(
+    details: D,
+    statusCode: number,
+  ): D & Pick<HeadersReceivedDetails, "statusCode" | "statusLine" | "timeStamp" | "frameId"> {
+    const code = details.statusCode ?? statusCode
+    return this.stamped({
+      ...details,
+      statusCode: code,
+      statusLine: details.statusLine ?? `HTTP/1.1 ${code}`,
+    })
+  }
+
+  private filterResponseData(requestId: string): StreamFilter {
+    if (this.failFilterResponseData !== undefined) {
+      throw new Error(this.failFilterResponseData)
+    }
+    const filter = new FakeStreamFilter(requestId)
+    this.streamFilters.push({ requestId, filter })
+    return filter
+  }
+
+  // Firefox finds the channel only while a blocking onHeadersReceived holds
+  // it and answers undefined otherwise
+  private getSecurityInfo(
+    requestId: string,
+    options: SecurityInfoOptions,
+  ): Promise<SecurityInfo | undefined> {
+    const blocking = this.headersReceived.isBlocking(requestId)
+    this.securityInfoCalls.push({ requestId, options, blocking })
+    if (!blocking) {
+      return Promise.resolve(undefined)
+    }
+    if (this.securityInfo instanceof Error) {
+      return Promise.reject(this.securityInfo)
+    }
+    return Promise.resolve(this.securityInfo)
   }
 
   private connect(info: ConnectInfo): Port {

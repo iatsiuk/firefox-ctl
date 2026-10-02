@@ -216,18 +216,58 @@ export interface HttpHeader {
   binaryValue?: number[]
 }
 
+// a raw part carries bytes, or file with the placeholder "<file>"; truncated
+// and originalSize appear when Firefox cut the body at its own raw cap
+export interface UploadData {
+  bytes?: ArrayBuffer
+  file?: string
+  truncated?: boolean
+  originalSize?: number
+}
+
+// present only for a listener registered with "requestBody"
+export interface RequestBody {
+  formData?: Record<string, string[]>
+  raw?: UploadData[]
+  error?: string
+}
+
 export interface RequestDetails {
   requestId: string
   url: string
   method: string
   type: string
   tabId: number
+  frameId: number
+  timeStamp: number
+  documentUrl?: string
+  originUrl?: string
+  requestBody?: RequestBody
 }
 
-export interface CompletedDetails extends RequestDetails {
-  statusCode: number
-  responseHeaders?: HttpHeader[]
+// requestHeaders only for a listener registered with "requestHeaders"
+export interface SendHeadersDetails extends RequestDetails {
+  requestHeaders?: HttpHeader[]
 }
+
+// responseHeaders only for a listener registered with "responseHeaders"
+export interface HeadersReceivedDetails extends RequestDetails {
+  statusCode: number
+  statusLine: string
+  responseHeaders?: HttpHeader[]
+  ip?: string
+  fromCache?: boolean
+}
+
+export interface ResponseDetails extends HeadersReceivedDetails {
+  fromCache: boolean
+}
+
+export interface RedirectDetails extends ResponseDetails {
+  redirectUrl: string
+}
+
+export type CompletedDetails = ResponseDetails
 
 export interface ErrorDetails extends RequestDetails {
   error: string
@@ -235,20 +275,113 @@ export interface ErrorDetails extends RequestDetails {
 
 export interface RequestFilter {
   urls: string[]
+  tabId?: number
 }
 
-// webRequest listeners take a filter and an optional extra info spec, so they
-// do not fit the plain Event shape
-export interface WebRequestEvent<F> {
-  addListener(listener: F, filter: RequestFilter, extraInfoSpec?: string[]): void
+export interface BlockingResponse {
+  cancel?: boolean
+  redirectUrl?: string
+  requestHeaders?: HttpHeader[]
+  responseHeaders?: HttpHeader[]
+}
+
+// Firefox waits for a returned promise only on a listener registered with
+// "blocking"; a plain listener returns nothing
+export type BlockingListener<D> =
+  | ((details: D) => void)
+  | ((details: D) => BlockingResponse | undefined | Promise<BlockingResponse | undefined>)
+
+// onErrorOccurred takes the listener and the filter only
+export interface WebRequestFilterEvent<F> {
+  addListener(listener: F, filter: RequestFilter): void
   removeListener(listener: F): void
   hasListener(listener: F): boolean
 }
 
+// webRequest listeners take a filter and an optional extra info spec, so they
+// do not fit the plain Event shape
+export interface WebRequestEvent<F> extends WebRequestFilterEvent<F> {
+  addListener(listener: F, filter: RequestFilter, extraInfoSpec?: string[]): void
+}
+
+export type StreamFilterStatus =
+  | "uninitialized"
+  | "transferringdata"
+  | "finishedtransferringdata"
+  | "suspended"
+  | "closed"
+  | "disconnected"
+  | "failed"
+
+export interface StreamFilterDataEvent {
+  data: ArrayBuffer
+}
+
+// the response body as the page would receive it, content-decoded; the page
+// gets only what is written until the filter closes or disconnects
+export interface StreamFilter {
+  readonly status: StreamFilterStatus
+  readonly error: string
+  onstart: (() => void) | null
+  ondata: ((event: StreamFilterDataEvent) => void) | null
+  onstop: (() => void) | null
+  onerror: (() => void) | null
+  write(data: ArrayBuffer | Uint8Array): void
+  close(): void
+  disconnect(): void
+}
+
+export interface SecurityInfoOptions {
+  certificateChain?: boolean
+  rawDER?: boolean
+}
+
+export interface CertificateInfo {
+  subject: string
+  issuer: string
+  // milliseconds since the epoch
+  validity: { start: number; end: number }
+  fingerprint: { sha1?: string; sha256: string }
+  serialNumber?: string
+  isBuiltInRoot?: boolean
+  subjectPublicKeyInfoDigest?: { sha256: string }
+}
+
+export interface SecurityInfo {
+  state: "insecure" | "weak" | "broken" | "secure"
+  errorMessage?: string
+  protocolVersion?: string
+  cipherSuite?: string
+  keaGroupName?: string
+  signatureSchemeName?: string
+  secretKeyLength?: number
+  isExtendedValidation?: boolean
+  isDomainMismatch?: boolean
+  isNotValidAtThisTime?: boolean
+  isUntrusted?: boolean
+  certificateTransparencyStatus?: string
+  // the schema says string, Firefox answers a boolean
+  hsts?: boolean
+  hpkp?: boolean
+  weaknessReasons?: string[]
+  certificates: CertificateInfo[]
+}
+
 export interface WebRequest {
-  readonly onBeforeRequest: WebRequestEvent<(details: RequestDetails) => void>
+  readonly onBeforeRequest: WebRequestEvent<BlockingListener<RequestDetails>>
+  readonly onSendHeaders: WebRequestEvent<(details: SendHeadersDetails) => void>
+  readonly onHeadersReceived: WebRequestEvent<BlockingListener<HeadersReceivedDetails>>
+  readonly onResponseStarted: WebRequestEvent<(details: ResponseDetails) => void>
+  readonly onBeforeRedirect: WebRequestEvent<(details: RedirectDetails) => void>
   readonly onCompleted: WebRequestEvent<(details: CompletedDetails) => void>
-  readonly onErrorOccurred: WebRequestEvent<(details: ErrorDetails) => void>
+  readonly onErrorOccurred: WebRequestFilterEvent<(details: ErrorDetails) => void>
+  filterResponseData(requestId: string): StreamFilter
+  // answers only inside a blocking onHeadersReceived that awaits it, and
+  // undefined once the channel is no longer registered
+  getSecurityInfo(
+    requestId: string,
+    options: SecurityInfoOptions,
+  ): Promise<SecurityInfo | undefined>
 }
 
 // a child frame is a frame of a tab, not a native-messaging wire frame
@@ -261,7 +394,10 @@ export interface FrameNavigationDetails {
 }
 
 export interface WebNavigation {
+  readonly onBeforeNavigate: Event<(details: FrameNavigationDetails) => void>
+  readonly onCommitted: Event<(details: FrameNavigationDetails) => void>
   readonly onDOMContentLoaded: Event<(details: FrameNavigationDetails) => void>
+  readonly onCompleted: Event<(details: FrameNavigationDetails) => void>
 }
 
 export interface Extension {

@@ -72,12 +72,20 @@ function started(overrides: Partial<RequestDetails> = {}): RequestDetails {
     method: "GET",
     type: "script",
     tabId: 1,
+    frameId: 0,
+    timeStamp: 0,
     ...overrides,
   }
 }
 
 function completed(overrides: Partial<CompletedDetails> = {}): CompletedDetails {
-  return { ...started(), statusCode: 200, ...overrides }
+  return {
+    ...started(),
+    statusCode: 200,
+    statusLine: "HTTP/1.1 200 OK",
+    fromCache: false,
+    ...overrides,
+  }
 }
 
 describe("getNetworkRequests", () => {
