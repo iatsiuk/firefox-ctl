@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test"
 
-import type { RequestBody, RequestDetails } from "../src/browser"
+import type { RequestBody, RequestDetails, SecurityInfo } from "../src/browser"
 import type { HarEntry, HarRecording } from "../src/har"
 import { buildLog } from "../src/har"
 import { HarRecorder, type StartOptions } from "../src/har-recorder"
@@ -1028,5 +1028,171 @@ describe("HarRecorder stream filter release", () => {
     h.browser.removeTab(TAB_ID)
     filter.pushError("NS_BINDING_ABORTED")
     expect(h.entries()[0]?.response.content._bodyError).toBe("NS_BINDING_ABORTED")
+  })
+})
+
+const VALID_FROM = Date.UTC(2026, 0, 1)
+const VALID_TO = Date.UTC(2027, 0, 1)
+
+function certificate(subject: string): SecurityInfo["certificates"][number] {
+  return {
+    subject: `CN=${subject}`,
+    issuer: "CN=Example CA",
+    validity: { start: VALID_FROM, end: VALID_TO },
+    fingerprint: { sha1: "aa:bb", sha256: `${subject}:sha256` },
+    serialNumber: "01",
+    isBuiltInRoot: false,
+  }
+}
+
+const SECURE: SecurityInfo = {
+  state: "secure",
+  protocolVersion: "TLSv1.3",
+  cipherSuite: "TLS_AES_128_GCM_SHA256",
+  keaGroupName: "x25519",
+  signatureSchemeName: "ECDSA-P256-SHA256",
+  secretKeyLength: 128,
+  isExtendedValidation: false,
+  isDomainMismatch: false,
+  certificateTransparencyStatus: "valid",
+  hsts: true,
+  hpkp: false,
+  weaknessReasons: [],
+  certificates: [certificate("example.com"), certificate("Example CA")],
+}
+
+describe("HarRecorder TLS summary", () => {
+  test("an https response gets _securityInfo from the first certificate", async () => {
+    const h = harness()
+    h.start()
+    h.browser.securityInfo = SECURE
+    void h.browser.emitRequestStarted(req())
+    const answers = await h.browser.emitHeadersReceived({ ...req(), statusCode: 200 })
+    expect(answers).toEqual([undefined])
+    expect(h.browser.securityInfoCalls).toEqual([{ requestId: "r1", options: {}, blocking: true }])
+    expect(only(h.entries())._securityInfo).toStrictEqual({
+      state: "secure",
+      protocolVersion: "TLSv1.3",
+      cipherSuite: "TLS_AES_128_GCM_SHA256",
+      keaGroupName: "x25519",
+      signatureSchemeName: "ECDSA-P256-SHA256",
+      isExtendedValidation: false,
+      hsts: true,
+      hpkp: false,
+      certificate: {
+        subject: "CN=example.com",
+        issuer: "CN=Example CA",
+        validity: {
+          start: new Date(VALID_FROM).toISOString(),
+          end: new Date(VALID_TO).toISOString(),
+        },
+        fingerprint: { sha256: "example.com:sha256" },
+      },
+    })
+  })
+
+  test("errorMessage is copied when Firefox gives one", async () => {
+    const h = harness()
+    h.start()
+    h.browser.securityInfo = {
+      state: "broken",
+      errorMessage: "SSL_ERROR_BAD_CERT",
+      certificates: [],
+    }
+    void h.browser.emitRequestStarted(req())
+    await h.browser.emitHeadersReceived({ ...req(), statusCode: 200 })
+    expect(only(h.entries())._securityInfo).toStrictEqual({
+      state: "broken",
+      errorMessage: "SSL_ERROR_BAD_CERT",
+    })
+  })
+
+  test("a wss handshake is asked like https", async () => {
+    const h = harness()
+    h.start()
+    h.browser.securityInfo = SECURE
+    const socket = req({ url: "wss://example.com/socket", type: "websocket" })
+    void h.browser.emitRequestStarted(socket)
+    await h.browser.emitHeadersReceived({ ...socket, statusCode: 101 })
+    expect(only(h.entries())._securityInfo?.state).toBe("secure")
+  })
+
+  test("an http request is not asked and answers at once", async () => {
+    const h = harness()
+    h.start()
+    h.browser.securityInfo = SECURE
+    const plain = req({ url: "http://example.com/api" })
+    void h.browser.emitRequestStarted(plain)
+    const answers = h.browser.emitHeadersReceived({ ...plain, statusCode: 200 })
+    expect(h.browser.headersReceived.isBlocking("r1")).toBe(false)
+    expect(h.browser.securityInfoCalls).toEqual([])
+    expect(await answers).toEqual([undefined])
+    expect(only(h.entries())._securityInfo).toBeUndefined()
+  })
+
+  test("the summary lands on the hop that asked, not on a later hop", async () => {
+    const h = harness()
+    h.start()
+    const first = req({ url: "https://example.com/old" })
+    const second = req({ url: "https://example.com/new" })
+    h.browser.securityInfo = { ...SECURE, certificates: [certificate("old.example")] }
+    void h.browser.emitRequestStarted(first)
+    const asked = h.browser.emitHeadersReceived({ ...first, statusCode: 301 })
+    h.browser.emitRedirect({ ...first, statusCode: 301, redirectUrl: second.url })
+    void h.browser.emitRequestStarted(second)
+    await asked
+    const [redirect, current] = h.entries()
+    expect(redirect?._securityInfo?.certificate?.subject).toBe("CN=old.example")
+    expect(current?._securityInfo).toBeUndefined()
+  })
+
+  test("each hop of a redirect keeps its own summary", async () => {
+    const h = harness()
+    h.start()
+    const first = req({ url: "https://example.com/old" })
+    const second = req({ url: "https://example.com/new" })
+    h.browser.securityInfo = { ...SECURE, certificates: [certificate("old.example")] }
+    void h.browser.emitRequestStarted(first)
+    const firstAsked = h.browser.emitHeadersReceived({ ...first, statusCode: 301 })
+    h.browser.emitRedirect({ ...first, statusCode: 301, redirectUrl: second.url })
+    void h.browser.emitRequestStarted(second)
+    h.browser.securityInfo = { ...SECURE, certificates: [certificate("new.example")] }
+    const secondAsked = h.browser.emitHeadersReceived({ ...second, statusCode: 200 })
+    await Promise.all([firstAsked, secondAsked])
+    const subjects = h.entries().map((entry) => entry._securityInfo?.certificate?.subject)
+    expect(subjects).toEqual(["CN=old.example", "CN=new.example"])
+  })
+
+  test("an answer after stop never reaches the finished recording", async () => {
+    const h = harness()
+    h.start()
+    h.browser.securityInfo = SECURE
+    void h.browser.emitRequestStarted(req())
+    const asked = h.browser.emitHeadersReceived({ ...req(), statusCode: 200 })
+    const recording = h.stop()
+    await asked
+    expect(recording.hops[0]?.securityInfo).toBeUndefined()
+  })
+
+  test("a getSecurityInfo rejection leaves the entry without _securityInfo", async () => {
+    const h = harness()
+    h.start()
+    h.browser.securityInfo = new Error("no security info")
+    void h.browser.emitRequestStarted(req())
+    const answers = await h.browser.emitHeadersReceived({ ...req(), statusCode: 200 })
+    expect(answers).toEqual([undefined])
+    const entry = only(h.entries())
+    expect(entry._securityInfo).toBeUndefined()
+    expect(entry.response.status).toBe(200)
+  })
+
+  test("events of a stale hop are not asked", () => {
+    const h = harness()
+    h.start()
+    const first = req({ url: "https://example.com/old" })
+    void h.browser.emitRequestStarted(first)
+    h.browser.emitRedirect({ ...first, statusCode: 302, redirectUrl: "https://example.com/new" })
+    void h.browser.emitHeadersReceived({ ...first, statusCode: 500 })
+    expect(h.browser.securityInfoCalls).toEqual([])
   })
 })

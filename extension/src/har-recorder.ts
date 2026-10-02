@@ -14,6 +14,7 @@ import type {
   RequestDetails,
   RequestFilter,
   ResponseDetails,
+  SecurityInfo,
   SendHeadersDetails,
   StreamFilter,
   UploadData,
@@ -23,6 +24,7 @@ import type {
 import type { Environment } from "./env"
 import type {
   HarRecording,
+  HarSecurityInfo,
   HopRecord,
   PageRecord,
   RequestBodyShape,
@@ -220,10 +222,7 @@ export class HarRecorder {
         return undefined
       },
       sendHeaders: (d) => sendHeaders(recording, d),
-      headersReceived: (d) => {
-        headersReceived(recording, d)
-        return undefined
-      },
+      headersReceived: (d) => headersReceived(recording, d),
       responseStarted: (d) => responseStarted(recording, d),
       beforeRedirect: (d) => ended(recording, d, d.redirectUrl),
       completed: (d) => ended(recording, d),
@@ -235,7 +234,7 @@ export class HarRecorder {
 interface HopListeners {
   beforeRequest: (details: RequestDetails) => undefined
   sendHeaders: (details: SendHeadersDetails) => void
-  headersReceived: (details: HeadersReceivedDetails) => undefined
+  headersReceived: (details: HeadersReceivedDetails) => Promise<undefined> | undefined
   responseStarted: (details: ResponseDetails) => void
   beforeRedirect: (details: RedirectDetails) => void
   completed: (details: CompletedDetails) => void
@@ -465,12 +464,65 @@ function response(hop: HopRecord, details: HeadersReceivedDetails): void {
   }
 }
 
-function headersReceived(recording: Recording, details: HeadersReceivedDetails): void {
+// a TLS request blocks until getSecurityInfo answers: the channel is known
+// only while the listener holds it; the response is never modified
+function headersReceived(
+  recording: Recording,
+  details: HeadersReceivedDetails,
+): Promise<undefined> | undefined {
   const hop = openHop(recording, details)
-  if (hop !== undefined) {
-    hop.headersReceived = details.timeStamp
-    response(hop, details)
+  if (hop === undefined) {
+    return undefined
   }
+  hop.headersReceived = details.timeStamp
+  response(hop, details)
+  if (!TLS_URL.test(details.url)) {
+    return undefined
+  }
+  return recording.browser.webRequest.getSecurityInfo(details.requestId, {}).then(
+    (info) => {
+      if (info !== undefined && !recording.stopped) {
+        hop.securityInfo = securitySummary(info)
+      }
+      return undefined
+    },
+    () => undefined,
+  )
+}
+
+const TLS_URL = /^(https|wss):/i
+
+/** What a HAR keeps of the security info: the connection and the leaf certificate. */
+function securitySummary(info: SecurityInfo): HarSecurityInfo {
+  const summary: HarSecurityInfo = defined({
+    state: info.state,
+    errorMessage: info.errorMessage,
+    protocolVersion: info.protocolVersion,
+    cipherSuite: info.cipherSuite,
+    keaGroupName: info.keaGroupName,
+    signatureSchemeName: info.signatureSchemeName,
+    isExtendedValidation: info.isExtendedValidation,
+    hsts: info.hsts,
+    hpkp: info.hpkp,
+  })
+  const leaf = info.certificates[0]
+  if (leaf !== undefined) {
+    summary.certificate = {
+      subject: leaf.subject,
+      issuer: leaf.issuer,
+      validity: {
+        start: new Date(leaf.validity.start).toISOString(),
+        end: new Date(leaf.validity.end).toISOString(),
+      },
+      fingerprint: { sha256: leaf.fingerprint.sha256 },
+    }
+  }
+  return summary
+}
+
+// drops the fields Firefox left out, so they stay out of the HAR
+function defined<T extends object>(fields: T): T {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) as T
 }
 
 function responseStarted(recording: Recording, details: ResponseDetails): void {
