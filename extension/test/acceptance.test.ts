@@ -798,7 +798,7 @@ describe("the whole command table", () => {
     }
   })
 
-  test("all 37 commands answer a host frame with their declared flags", async () => {
+  test("all 39 commands answer a host frame with their declared flags", async () => {
     const browser = userBrowser()
     const { port } = session(browser)
     contentTab(browser)
@@ -902,6 +902,8 @@ describe("the whole command table", () => {
         { storeId: "firefox-default", tabId },
         { cookies: [{ name: "sid", value: "s1", domain: "mozilla.org", hostOnly: true }] },
       ],
+      ["startHar", { maxBodySize: 1024, tabId, windowId }],
+      ["stopHar", { tabId, windowId }],
       ["closeTab", { tabId }],
       ["closeWindow", {}],
     ]
@@ -946,7 +948,7 @@ describe("the whole command table", () => {
       )
     }
     // tab-wide or background commands that take a tab but never a child frame
-    for (const command of ["navigate", "screenshot", "getNetworkRequests"]) {
+    for (const command of ["navigate", "screenshot", "getNetworkRequests", "startHar", "stopHar"]) {
       expect(flagsOf(command).has("tabId")).toBe(true)
       expect(flagsOf(command).has("windowId")).toBe(true)
       expect(`${command} frameId: ${flagsOf(command).has("frameId")}`).toBe(

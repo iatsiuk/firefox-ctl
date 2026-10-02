@@ -58,7 +58,7 @@ describe("Dispatcher core commands", () => {
       success: true,
       result: {
         extension: "0.4.2",
-        features: ["sessions", "dom", "devtools", "frames", "cookies"],
+        features: ["sessions", "dom", "devtools", "frames", "cookies", "har"],
       },
     })
     const result = (response as { result: Record<string, unknown> }).result

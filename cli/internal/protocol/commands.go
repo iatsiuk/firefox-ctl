@@ -184,6 +184,10 @@ var Commands = []Spec{
 	)},
 	// the cookies array arrives through --json, typically an exportCookies file
 	{Name: "importCookies", Flags: cookieStore()},
+	{Name: "startHar", Flags: page(
+		Flag{Name: "maxBodySize", Kind: KindInt, Default: 10485760, Usage: "bytes kept per request or response body, 0 records metadata only"},
+	)},
+	{Name: "stopHar", Flags: page()},
 }
 
 // page appends the tab and window selectors every page command accepts.

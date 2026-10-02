@@ -11,6 +11,7 @@ import { deleteCookies, exportCookies, importCookies, setCookie } from "./handle
 import { getNetworkRequests } from "./handlers/devtools"
 import { PAGE_COMMANDS, pageHandlers } from "./handlers/dom"
 import { listFrames, unwatchFrames, watchFrames } from "./handlers/frames"
+import { startHar, stopHar } from "./handlers/har"
 import { screenshot } from "./handlers/screenshot"
 import { closeTab, closeWindow, getActiveTab, getTabs, navigate } from "./handlers/tabs"
 import {
@@ -357,10 +358,10 @@ export const ping: Handler = (_params, { env }) => ({ pong: true, timestamp: env
 export const version: Handler = (_params, { browser }) => ({
   extension: browser.runtime.getManifest().version,
   // grows as later plans add capabilities
-  features: ["sessions", "dom", "devtools", "frames", "cookies"],
+  features: ["sessions", "dom", "devtools", "frames", "cookies", "har"],
 })
 
-/** Every command of the session, window, tab, page and cookie plans, plus the two probes. */
+/** Every command of the session, window, tab, page, cookie and HAR plans, plus the two probes. */
 export function createDispatcher(browser: Browser, env: Environment): Dispatcher {
   const dispatcher = new Dispatcher({
     browser,
@@ -398,6 +399,8 @@ export function createDispatcher(browser: Browser, env: Environment): Dispatcher
   dispatcher.register("setCookie", setCookie)
   dispatcher.register("deleteCookies", deleteCookies)
   dispatcher.register("importCookies", importCookies)
+  dispatcher.register("startHar", startHar)
+  dispatcher.register("stopHar", stopHar)
   for (const command of PAGE_COMMANDS) {
     dispatcher.register(command, pageHandlers[command])
   }

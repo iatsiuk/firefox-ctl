@@ -29,6 +29,7 @@
     "tabGroups",
     "<all_urls>",
     "webRequest",
+    "webRequestBlocking",
     "webNavigation",
     "storage",
     "cookies"

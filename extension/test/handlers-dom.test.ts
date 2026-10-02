@@ -630,7 +630,7 @@ describe("registration", () => {
 
     expect(response).toMatchObject({
       success: true,
-      result: { features: ["sessions", "dom", "devtools", "frames", "cookies"] },
+      result: { features: ["sessions", "dom", "devtools", "frames", "cookies", "har"] },
     })
   })
 })

@@ -2,10 +2,10 @@
 // in the content script and go through `pageCommand`; the network log is the
 // background's own webRequest tracker, so it is served here.
 
-import type { Handler, HandlerDeps } from "../dispatch"
+import type { Handler } from "../dispatch"
 import type { NetworkQuery } from "../network"
 import type { JsonObject, JsonValue } from "../protocol"
-import { REDACT_HEADERS_DEFAULT, readRedactHeaders } from "../settings"
+import { redactHeadersOrDefault } from "../settings"
 import { resolveTargetTab } from "./tabs"
 
 /** The query the tracker understands, with the target tab already resolved. */
@@ -21,15 +21,6 @@ function networkQuery(params: JsonObject, tabId: number, redact: boolean): Netwo
   }
 }
 
-/** Reads the setting on every call; an unreadable storage stays redacted. */
-async function redactSetting(deps: HandlerDeps): Promise<boolean> {
-  try {
-    return await readRedactHeaders(deps.browser)
-  } catch {
-    return REDACT_HEADERS_DEFAULT
-  }
-}
-
 /**
  * The requests Firefox made for one tab. `includeHeaders` returns the response
  * headers with the credential-bearing ones (`Set-Cookie`, `Authorization` and
@@ -42,7 +33,7 @@ export const getNetworkRequests: Handler = async (params, deps) => {
   if (tab.id === undefined) {
     throw new Error("Firefox returned a tab without an id.")
   }
-  const redact = await redactSetting(deps)
+  const redact = await redactHeadersOrDefault(deps.browser)
   const result = deps.network.query(networkQuery(params, tab.id, redact))
   return { tabId: tab.id, ...result } as unknown as JsonValue
 }

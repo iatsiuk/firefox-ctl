@@ -2,7 +2,7 @@
 
 Every command the CLI and the extension understand; the ones deliberately left out are listed under Dropped. Command names, parameter names and result shapes are stable so agent prompts keep working across versions. Invocation: `firefox-ctl <command> [--key value ...]`; nested or array values via `--json '{...}'`, which is shallow-merged over the typed flags; `--json @file` reads that object from a file and `--json -` from stdin, curl style, so a large payload such as an `importCookies` batch never has to fit on the command line. An unreadable file, empty content or anything but a JSON object is a usage error (exit 2).
 
-All commands accept `--request-timeout <ms>` (5000-300000, default 150000), sent as `_timeout`; the name avoids a clash with waitFor's own `timeout` parameter. Output is JSON on stdout; errors go to stderr with a non-zero exit code and the extension's error message. The message starts with a stable prefix where one is defined: `TAB_CLOSED`, `TAB_UNAVAILABLE`, `NO_TABS`, `MODE_MISMATCH`, `RESTRICTED_PAGE`, `PAGE_LOAD_FAILED`, `CONTENT_SCRIPT_UNAVAILABLE`, `CONTENT_SCRIPT_ERROR`, `COMMAND_TIMEOUT`, `SCREENSHOT_TOO_LARGE`, `EVALUATE_DISABLED`, `AMBIGUOUS_TEXT`, `FRAME_NOT_OBSERVED`. A `details` object from the extension is not forwarded.
+All commands accept `--request-timeout <ms>` (5000-300000, default 150000), sent as `_timeout`; the name avoids a clash with waitFor's own `timeout` parameter. Output is JSON on stdout; errors go to stderr with a non-zero exit code and the extension's error message. The message starts with a stable prefix where one is defined: `TAB_CLOSED`, `TAB_UNAVAILABLE`, `NO_TABS`, `MODE_MISMATCH`, `RESTRICTED_PAGE`, `PAGE_LOAD_FAILED`, `CONTENT_SCRIPT_UNAVAILABLE`, `CONTENT_SCRIPT_ERROR`, `COMMAND_TIMEOUT`, `SCREENSHOT_TOO_LARGE`, `EVALUATE_DISABLED`, `AMBIGUOUS_TEXT`, `FRAME_NOT_OBSERVED`, `HAR_TOO_LARGE`, `HAR_ALREADY_RECORDING`, `HAR_NOT_RECORDING`. A `details` object from the extension is not forwarded.
 
 The extension honours `_timeout` too: it gives every command a deadline 1000 ms shorter than the host's, covering the wait for the state lock, the session preamble, the handler and the persist, and answers `COMMAND_TIMEOUT: <command> did not finish within <ms> ms.` when that budget runs out, so a page that never replies is reported rather than hung. A timed-out command is answered, not cancelled: whatever it produces afterwards is logged and dropped. Only `createWindow`, `closeTab`, `closeWindow`, `attachTab` and `detachTab` serialise against each other; every other command runs concurrently, and `ping` and `version` skip the session entirely so they answer while another command is stuck. `screenshot` adds one more, narrower exception: every capture of the same tab serialises behind a per-tab lock around its own annotate/capture/remove section, so a plain capture can never land mid-annotation; that lock is freed once the command's own deadline passes, so a tab whose content script never answers cannot wedge later captures of it forever.
 
@@ -502,6 +502,13 @@ Firefox accepts at most 1 MB per host->extension message. A larger command, typi
 import of a big export, is not forwarded; the host answers
 `Message too large: importCookies message is <n> bytes, the Firefox limit is 1048576`
 and keeps serving, so split the file and import it in parts.
+
+## HAR
+
+| Command | Params | Notes |
+|---|---|---|
+| startHar | [maxBodySize=10485760], [tabId], [windowId] | `{tabId, startedDateTime, maxBodySize}`; starts a HAR 1.2 recording of the target tab, its child frames included: request and response headers, request bodies, response bodies through stream filters, redirects, errors, timings and pages; `maxBodySize` is the bytes kept per body, 0 records metadata only, at most 167772160 (`maxBodySize must be an integer between 0 and 167772160`); a tab already recording answers `HAR_ALREADY_RECORDING: tab <id> is already recording; call stopHar first` |
+| stopHar | [tabId], [windowId] | the HAR `{log}` of the recording, so `firefox-ctl stopHar > page.har` is a valid HAR file; releases the recording's stream filters and its memory; an explicit `tabId` answers even after its tab closed; a tab without a recording answers `HAR_NOT_RECORDING: no HAR recording on tab <id>`; credential headers and cookie values are `[redacted]` while header redaction is ticked in the add-on preferences; a reply that would not fit loses its largest bodies first and fails with `HAR_TOO_LARGE` only when it is too large without any |
 
 ## Dropped
 

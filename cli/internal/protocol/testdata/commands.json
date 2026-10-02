@@ -263,5 +263,17 @@
   {
     "name": "importCookies",
     "flags": [{ "name": "storeId", "kind": "string" }, { "name": "tabId", "kind": "int" }]
+  },
+  {
+    "name": "startHar",
+    "flags": [
+      { "name": "maxBodySize", "kind": "int", "default": 10485760 },
+      { "name": "tabId", "kind": "int" },
+      { "name": "windowId", "kind": "int" }
+    ]
+  },
+  {
+    "name": "stopHar",
+    "flags": [{ "name": "tabId", "kind": "int" }, { "name": "windowId", "kind": "int" }]
   }
 ]

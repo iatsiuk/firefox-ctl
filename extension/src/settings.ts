@@ -33,6 +33,15 @@ export function readRedactHeaders(browser: Browser): Promise<boolean> {
   return readFlag(browser, REDACT_HEADERS_KEY, REDACT_HEADERS_DEFAULT)
 }
 
+/** The redaction switch for a reply; an unreadable storage stays redacted. */
+export async function redactHeadersOrDefault(browser: Browser): Promise<boolean> {
+  try {
+    return await readRedactHeaders(browser)
+  } catch {
+    return REDACT_HEADERS_DEFAULT
+  }
+}
+
 export function writeEvaluateEnabled(browser: Browser, enabled: boolean): Promise<void> {
   return browser.storage.local.set({ [EVALUATE_ENABLED_KEY]: enabled })
 }

@@ -6,6 +6,7 @@ import {
   REDACT_HEADERS_KEY,
   readEvaluateEnabled,
   readRedactHeaders,
+  redactHeadersOrDefault,
   writeEvaluateEnabled,
   writeRedactHeaders,
 } from "../src/settings"
@@ -77,6 +78,13 @@ describe("settings failures", () => {
     const browser = brokenStorage()
     expect(readEvaluateEnabled(browser)).rejects.toThrow("storage offline")
     expect(readRedactHeaders(browser)).rejects.toThrow("storage offline")
+  })
+
+  test("the reply-side redaction read turns a rejection into redacting", async () => {
+    expect(await redactHeadersOrDefault(brokenStorage())).toBe(true)
+    const browser = new FakeBrowser()
+    await writeRedactHeaders(browser, false)
+    expect(await redactHeadersOrDefault(browser)).toBe(false)
   })
 })
 

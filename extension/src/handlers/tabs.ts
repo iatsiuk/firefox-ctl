@@ -172,7 +172,7 @@ export function parseTabId(value: JsonValue | undefined): number {
   return value
 }
 
-function idOf(tab: Tab): number {
+export function idOf(tab: Tab): number {
   if (tab.id === undefined) {
     throw new Error("Firefox returned a tab without an id.")
   }

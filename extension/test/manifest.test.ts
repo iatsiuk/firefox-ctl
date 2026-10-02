@@ -69,6 +69,7 @@ describe("manifest.json", () => {
         "tabs",
         "webNavigation",
         "webRequest",
+        "webRequestBlocking",
       ].sort(),
     )
   })
