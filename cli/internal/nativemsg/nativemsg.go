@@ -13,9 +13,10 @@ import (
 
 const (
 	// MaxInbound caps extension->host payloads. The spec allows 4 GB; the
-	// project cap is far lower so a buggy build cannot force a huge
-	// allocation.
-	MaxInbound = 10 * 1024 * 1024
+	// project cap is sized for a stopHar reply, which the extension fits
+	// below it, and still bounds what a buggy build can make the host
+	// allocate.
+	MaxInbound = 256 * 1024 * 1024
 	// MaxOutbound is the Firefox limit for host->extension payloads.
 	MaxOutbound = 1024 * 1024
 
@@ -45,16 +46,23 @@ func (e *SizeError) Is(target error) bool {
 // close the underlying reader to unblock a pending Read.
 type Reader struct {
 	r      io.Reader
+	limit  uint32
 	header [headerSize]byte
 }
 
-// NewReader returns a Reader over r.
+// NewReader returns a Reader over r that refuses payloads above MaxInbound.
 func NewReader(r io.Reader) *Reader {
-	return &Reader{r: r}
+	return NewReaderLimit(r, MaxInbound)
+}
+
+// NewReaderLimit returns a Reader over r that refuses payloads above limit.
+func NewReaderLimit(r io.Reader, limit uint32) *Reader {
+	return &Reader{r: r, limit: limit}
 }
 
 // Read returns the next payload. It reports io.EOF on a frame boundary and
-// io.ErrUnexpectedEOF when the stream ends mid-frame.
+// io.ErrUnexpectedEOF when the stream ends mid-frame. A payload above the
+// limit is discarded and reported as ErrTooLarge; the stream stays usable.
 func (r *Reader) Read() (json.RawMessage, error) {
 	if _, err := io.ReadFull(r.r, r.header[:]); err != nil {
 		if errors.Is(err, io.EOF) {
@@ -69,8 +77,8 @@ func (r *Reader) Read() (json.RawMessage, error) {
 		return json.RawMessage("{}"), nil
 	}
 
-	if length > MaxInbound {
-		return nil, fmt.Errorf("%w: %d bytes (max %d)", ErrTooLarge, length, MaxInbound)
+	if length > r.limit {
+		return nil, r.discard(length)
 	}
 
 	payload := make([]byte, length)
@@ -83,6 +91,19 @@ func (r *Reader) Read() (json.RawMessage, error) {
 	}
 
 	return payload, nil
+}
+
+// discard drops an oversize payload so the next frame starts on a boundary.
+func (r *Reader) discard(length uint32) error {
+	if _, err := io.CopyN(io.Discard, r.r, int64(length)); err != nil {
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
+
+		return fmt.Errorf("discard oversize payload: %w", err)
+	}
+
+	return fmt.Errorf("%w: %d bytes (max %d)", ErrTooLarge, length, r.limit)
 }
 
 // Writer encodes values as frames. It is safe for concurrent use.

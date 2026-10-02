@@ -108,11 +108,6 @@ func TestReaderErrors(t *testing.T) {
 			input: append(header(16), []byte(`{"a":1}`)...),
 			want:  io.ErrUnexpectedEOF,
 		},
-		{
-			name:  "oversize length",
-			input: header(MaxInbound + 1),
-			want:  ErrTooLarge,
-		},
 	}
 
 	for _, tt := range tests {
@@ -129,6 +124,163 @@ func TestReaderErrors(t *testing.T) {
 				t.Errorf("payload = %q, want nil", got)
 			}
 		})
+	}
+}
+
+func TestMaxInboundFitsStopHar(t *testing.T) {
+	t.Parallel()
+
+	if MaxInbound != 256*1024*1024 {
+		t.Fatalf("MaxInbound = %d, want 256 MiB", MaxInbound)
+	}
+}
+
+func TestNewReaderDefaultsToMaxInbound(t *testing.T) {
+	t.Parallel()
+
+	input := io.MultiReader(bytes.NewReader(header(MaxInbound+1)), filler(MaxInbound+1),
+		bytes.NewReader(frame(`{"a":1}`)))
+	r := NewReader(input)
+
+	if _, err := r.Read(); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversize frame err = %v, want ErrTooLarge", err)
+	}
+
+	got, err := r.Read()
+	if err != nil || string(got) != `{"a":1}` {
+		t.Fatalf("next frame = %q, %v; want {\"a\":1}", got, err)
+	}
+}
+
+func TestReaderDiscardsOversizeFrame(t *testing.T) {
+	t.Parallel()
+
+	const limit = 16
+
+	tests := []struct {
+		name  string
+		input func() io.Reader
+		want  []error
+	}{
+		{
+			name: "oversize frame then a normal one",
+			input: func() io.Reader {
+				return lazyFrames(oversize(limit+1), normal(`{"a":1}`))
+			},
+			want: []error{ErrTooLarge, nil},
+		},
+		{
+			name: "two oversize frames then a normal one",
+			input: func() io.Reader {
+				return lazyFrames(oversize(limit+1), oversize(1<<20), normal(`{"a":1}`))
+			},
+			want: []error{ErrTooLarge, ErrTooLarge, nil},
+		},
+		{
+			name: "frame at the limit is read",
+			input: func() io.Reader {
+				return lazyFrames(normal(`{"a":"0123456"}`), normal(`{"a":1}`))
+			},
+			want: []error{nil, nil},
+		},
+		{
+			name: "split across one byte reads",
+			input: func() io.Reader {
+				return iotest.OneByteReader(lazyFrames(oversize(limit+1), normal(`{"a":1}`)))
+			},
+			want: []error{ErrTooLarge, nil},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := NewReaderLimit(tt.input(), limit)
+
+			for i, want := range tt.want {
+				got, err := r.Read()
+				if want != nil {
+					if !errors.Is(err, want) || got != nil {
+						t.Fatalf("frame %d = %q, %v; want nil, %v", i, got, err, want)
+					}
+
+					continue
+				}
+
+				if err != nil {
+					t.Fatalf("frame %d: unexpected error: %v", i, err)
+				}
+				if !json.Valid(got) {
+					t.Errorf("frame %d = %q, want intact JSON", i, got)
+				}
+			}
+
+			if _, err := r.Read(); !errors.Is(err, io.EOF) {
+				t.Errorf("after last frame err = %v, want io.EOF", err)
+			}
+		})
+	}
+}
+
+func TestReaderOversizeErrorText(t *testing.T) {
+	t.Parallel()
+
+	r := NewReaderLimit(lazyFrames(oversize(17)), 16)
+
+	_, err := r.Read()
+	if err == nil || err.Error() != "message too large: 17 bytes (max 16)" {
+		t.Fatalf("err = %v, want the size and the limit", err)
+	}
+}
+
+func TestReaderOversizeFrameCutShort(t *testing.T) {
+	t.Parallel()
+
+	const limit = 16
+
+	tests := []struct {
+		name  string
+		input io.Reader
+	}{
+		{
+			name:  "stream ends inside the discarded payload",
+			input: io.MultiReader(bytes.NewReader(header(1024)), filler(100)),
+		},
+		{
+			name:  "stream ends right after the oversize header",
+			input: bytes.NewReader(header(1024)),
+		},
+		{
+			name:  "one byte reads ending inside the payload",
+			input: iotest.OneByteReader(io.MultiReader(bytes.NewReader(header(1024)), filler(1023))),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := NewReaderLimit(tt.input, limit).Read()
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("err = %v, want io.ErrUnexpectedEOF", err)
+			}
+			if errors.Is(err, io.EOF) || errors.Is(err, ErrTooLarge) {
+				t.Errorf("err = %v also matches io.EOF or ErrTooLarge", err)
+			}
+		})
+	}
+}
+
+func TestReaderOversizeDiscardPropagatesReadError(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("boom")
+	input := io.MultiReader(bytes.NewReader(header(1024)), filler(10), iotest.ErrReader(sentinel))
+
+	_, err := NewReaderLimit(input, 16).Read()
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err = %v, want %v", err, sentinel)
 	}
 }
 
@@ -325,6 +477,39 @@ func TestWriterReportsShortWriteWithoutError(t *testing.T) {
 	if !errors.Is(err, io.ErrShortWrite) {
 		t.Fatalf("err = %v, want io.ErrShortWrite", err)
 	}
+}
+
+// lazyFrames joins frame parts without materialising oversize payloads.
+func lazyFrames(parts ...io.Reader) io.Reader {
+	return io.MultiReader(parts...)
+}
+
+// oversize is a frame header followed by length filler bytes generated on
+// demand.
+func oversize(length uint32) io.Reader {
+	return io.MultiReader(bytes.NewReader(header(length)), filler(int64(length)))
+}
+
+func normal(payload string) io.Reader {
+	return bytes.NewReader(frame(payload))
+}
+
+// filler yields n bytes of 'x' without allocating them.
+func filler(n int64) io.Reader {
+	return io.LimitReader(fillReader{}, n)
+}
+
+var fillBlock = bytes.Repeat([]byte("x"), 32*1024)
+
+type fillReader struct{}
+
+func (fillReader) Read(p []byte) (int, error) {
+	n := 0
+	for n < len(p) {
+		n += copy(p[n:], fillBlock)
+	}
+
+	return n, nil
 }
 
 // syncWriter serialises nothing on purpose: it only makes the race detector

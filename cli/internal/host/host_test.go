@@ -1136,7 +1136,7 @@ func TestServerStopsOnStdinFramingError(t *testing.T) {
 		want  error
 	}{
 		{name: "partial frame", frame: append(header(64), []byte("{}")...), want: io.ErrUnexpectedEOF},
-		{name: "oversize header", frame: header(nativemsg.MaxInbound + 1), want: nativemsg.ErrTooLarge},
+		{name: "oversize header then eof", frame: header(nativemsg.MaxInbound + 1), want: io.ErrUnexpectedEOF},
 	}
 
 	for _, tc := range tests {
@@ -1149,13 +1149,14 @@ func TestServerStopsOnStdinFramingError(t *testing.T) {
 				t.Fatalf("write frame: %v", err)
 			}
 
-			if errors.Is(tc.want, io.ErrUnexpectedEOF) {
-				_ = f.stdin.Close()
-			}
+			_ = f.stdin.Close()
 
 			err := f.wait()
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Run() = %v, want %v", err, tc.want)
+			}
+			if errors.Is(err, nativemsg.ErrTooLarge) {
+				t.Errorf("Run() = %v, a frame cut short is not ErrTooLarge", err)
 			}
 		})
 	}

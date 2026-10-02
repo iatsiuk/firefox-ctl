@@ -184,9 +184,10 @@ func TestHostStopsOnFramingErrors(t *testing.T) {
 			want:       io.ErrUnexpectedEOF,
 		},
 		{
-			name:  "oversize header",
-			frame: frameHeader(nativemsg.MaxInbound + 1),
-			want:  nativemsg.ErrTooLarge,
+			name:       "oversize header then eof",
+			frame:      frameHeader(nativemsg.MaxInbound + 1),
+			closeStdin: true,
+			want:       io.ErrUnexpectedEOF,
 		},
 	}
 
