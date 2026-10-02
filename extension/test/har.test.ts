@@ -5,6 +5,7 @@ import {
   fitLog,
   type Har,
   type HarEntry,
+  type HarPostData,
   type HarRecording,
   type HopRecord,
   harHeaders,
@@ -1084,6 +1085,39 @@ describe("fitLog", () => {
       { mimeType: "application/x-www-form-urlencoded", _formData: true, _bodyDropped: true },
     ])
     expect(fitted.log._recording.droppedBodies).toBe(2)
+  })
+
+  test.each<[string, HarPostData]>([
+    ["empty text", { mimeType: "text/plain", text: "" }],
+    [
+      "empty params",
+      { mimeType: "application/x-www-form-urlencoded", params: [], _formData: true },
+    ],
+  ])("a drop leaves an empty request body (%s) unmarked", (_name, post) => {
+    const har = buildLog(
+      recording({ hops: [{ ...bodyHop("large", 5000), method: "POST", postData: post }] }),
+    )
+    const fitted = fitLog(har, replyBytes(har) - 1)
+    expect(textOf(fitted, "large")).toBeUndefined()
+    expect(only(fitted).request.postData).toEqual(post)
+    expect(fitted.log._recording.droppedBodies).toBe(1)
+  })
+
+  test("a drop leaves an empty response body unmarked", () => {
+    const har = buildLog(
+      recording({
+        hops: [
+          hop({
+            body: { chunks: [], complete: true },
+            postData: { mimeType: "text/plain", text: "y".repeat(3000) },
+          }),
+        ],
+      }),
+    )
+    const fitted = fitLog(har, replyBytes(har) - 1)
+    expect(only(fitted).request.postData).toEqual({ mimeType: "text/plain", _bodyDropped: true })
+    expect(only(fitted).response.content._bodyDropped).toBeUndefined()
+    expect(fitted.log._recording.droppedBodies).toBe(1)
   })
 
   test("a counter growing a digit forces one more drop", () => {

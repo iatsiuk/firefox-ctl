@@ -7,7 +7,7 @@ import { AttachedTabs } from "../src/attached"
 import { CaptureLocks } from "../src/capture-locks"
 import { createDispatcher, Dispatcher } from "../src/dispatch"
 import { FrameRegistry } from "../src/frames"
-import { HarRecorder } from "../src/har-recorder"
+import { HAR_KEEP_MS, HarRecorder } from "../src/har-recorder"
 import { NetworkTracker } from "../src/network"
 import type { HostCommand, JsonObject } from "../src/protocol"
 import { commandContext } from "../src/protocol"
@@ -327,6 +327,41 @@ describe("late results", () => {
     await settle()
 
     expect(port.posted).toHaveLength(1)
+  })
+})
+
+describe("a stopHar past its deadline", () => {
+  test("keeps the HAR for the next stopHar until HAR_KEEP_MS has passed", async () => {
+    const browser = pageBrowser()
+    const env = new FakeEnvironment({ now: 1000 })
+    const dispatcher = createDispatcher(browser, env)
+    dispatcher.deps.har.attach(browser)
+    expect(await dispatcher.handle(frame("s", "startHar", { tabId: 10 }))).toMatchObject({
+      success: true,
+    })
+    const set = browser.storage.local.set.bind(browser.storage.local)
+    browser.storage.local.set = (items) =>
+      Object.hasOwn(items, WINDOW_STATE_KEY) ? HUNG() : set(items)
+
+    const late = dispatcher.handle(frame("f1", "stopHar", { tabId: 10, _timeout: 5000 }))
+    await settle()
+    env.advance(4000)
+    expect(await late).toMatchObject({
+      success: false,
+      error: "COMMAND_TIMEOUT: stopHar did not finish within 4000 ms.",
+    })
+
+    browser.storage.local.set = set
+    const again = await dispatcher.handle(frame("f2", "stopHar", { tabId: 10 }))
+    expect(again).toMatchObject({ success: true, result: { log: { version: "1.2" } } })
+    // no reply is known to have reached the client, so an answer in time keeps it too
+    const third = await dispatcher.handle(frame("f3", "stopHar", { tabId: 10 }))
+    expect(third).toEqual({ ...again, id: "f3" })
+    env.advance(HAR_KEEP_MS)
+    expect(await dispatcher.handle(frame("f4", "stopHar", { tabId: 10 }))).toMatchObject({
+      success: false,
+      error: "HAR_NOT_RECORDING: no HAR recording on tab 10",
+    })
   })
 })
 

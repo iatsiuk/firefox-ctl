@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1399,6 +1400,67 @@ func TestServerReplyReachesSlowReader(t *testing.T) {
 	}
 }
 
+// TestServerSlowReaderDoesNotHoldOtherClients pins that a reply to a client
+// reading slowly never sits in the extension message pump: the next client's
+// reply arrives while the slow one is still being written.
+func TestServerSlowReaderDoesNotHoldOtherClients(t *testing.T) {
+	t.Parallel()
+
+	f := start(t, &options{writeTimeout: time.Second})
+	slow := f.dial()
+	fast := f.dial()
+
+	slow.sendCommand(t, "stopHar", nil)
+	slowCmd := f.ext.read(t)
+	fast.sendCommand(t, "getTabs", nil)
+	fastCmd := f.ext.read(t)
+
+	result := `"` + strings.Repeat("s", 4<<20) + `"`
+	want := `{"success":true,"result":` + result + "}\n"
+	slowDone := make(chan string, 1)
+
+	var received atomic.Int64
+
+	go func() {
+		// slowRead would call t.Fatalf off the test goroutine
+		_ = slow.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+
+		var out bytes.Buffer
+
+		buf := make([]byte, 16*1024)
+
+		for out.Len() < len(want) {
+			n, err := slow.conn.Read(buf)
+			out.Write(buf[:n])
+			received.Add(int64(n))
+
+			if err != nil {
+				break
+			}
+
+			time.Sleep(2 * time.Millisecond)
+		}
+
+		slowDone <- out.String()
+	}()
+
+	writeFrame(t, f.stdin, []byte(fmt.Sprintf(`{"id":%q,"success":true,"result":%s}`, slowCmd.ID, result)))
+	writeFrame(t, f.stdin, []byte(fmt.Sprintf(`{"id":%q,"success":true,"result":[]}`, fastCmd.ID)))
+
+	if resp := fast.raw(t); resp["success"] != true {
+		t.Fatalf("fast client got %v, want its own reply", resp)
+	}
+
+	// the socket buffer takes the tail of a finished write, so half is the mark
+	if n := received.Load(); n >= int64(len(want)/2) {
+		t.Fatalf("the slow client had read %d of %d bytes; the fast client waited for it", n, len(want))
+	}
+
+	if got := <-slowDone; got != want {
+		t.Errorf("slow reader got %d bytes, want the %d-byte reply", len(got), len(want))
+	}
+}
+
 // slowRead reads n bytes in portions of size with a pause after each.
 func slowRead(t *testing.T, conn net.Conn, n, size int, pause time.Duration) []byte {
 	t.Helper()
@@ -1566,6 +1628,168 @@ func TestServerShutdownCutsLargeWrite(t *testing.T) {
 
 	if elapsed := time.Since(began); elapsed > time.Second {
 		t.Errorf("shutdown took %s during a large write, want under a second", elapsed)
+	}
+}
+
+// TestServerShutdownSkipsReplyEncoding pins that cancellation never waits for
+// a large reply to be encoded: the result is whitespace-heavy, so compacting
+// it takes far longer than the shutdown budget.
+func TestServerShutdownSkipsReplyEncoding(t *testing.T) {
+	t.Parallel()
+
+	f := start(t, &options{})
+	c := f.dial()
+
+	c.sendCommand(t, "stopHar", nil)
+	cmd := f.ext.read(t)
+
+	result := "[" + strings.Repeat("1 ,\n", 16<<20) + "1]"
+	writeFrame(t, f.stdin, []byte(fmt.Sprintf(`{"id":%q,"success":true,"result":%s}`, cmd.ID, result)))
+
+	// the pump decodes the frame and claims the request before encoding starts
+	deadline := time.Now().Add(30 * time.Second)
+
+	for {
+		f.srv.mu.Lock()
+		claimed := len(f.srv.pending) == 0
+		f.srv.mu.Unlock()
+
+		if claimed {
+			break
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatal("the reply was never claimed")
+		}
+
+		time.Sleep(time.Millisecond)
+	}
+
+	began := time.Now()
+	f.cancel()
+
+	if err := f.wait(); err != nil {
+		t.Errorf("Run() = %v, want nil", err)
+	}
+
+	if elapsed := time.Since(began); elapsed > 500*time.Millisecond {
+		t.Errorf("shutdown took %s while a reply was encoded, want under 500ms", elapsed)
+	}
+}
+
+// TestServerDeliversReplyBeforeStdinEOF pins that a reply the extension sent
+// right before closing stdin still reaches its client: the pump hands it to a
+// writer goroutine, and shutdown must not close the socket under that write.
+func TestServerDeliversReplyBeforeStdinEOF(t *testing.T) {
+	t.Parallel()
+
+	f := start(t, &options{})
+	c := f.dial()
+
+	c.sendCommand(t, "stopHar", nil)
+	cmd := f.ext.read(t)
+
+	result := `"` + strings.Repeat("e", 4<<20) + `"`
+	writeFrame(t, f.stdin, []byte(fmt.Sprintf(`{"id":%q,"success":true,"result":%s}`, cmd.ID, result)))
+
+	if err := f.stdin.Close(); err != nil {
+		t.Fatalf("close stdin: %v", err)
+	}
+
+	want := `{"success":true,"result":` + result + "}\n"
+	got := slowRead(t, c.conn, len(want), 64*1024, 0)
+
+	if string(got) != want {
+		t.Fatalf("client got %d bytes, want the %d-byte reply", len(got), len(want))
+	}
+
+	if err := f.wait(); err != nil {
+		t.Errorf("Run() = %v, want nil on stdin EOF", err)
+	}
+}
+
+// TestServerStdinEOFWaitIsBounded pins that a client which never reads its
+// reply holds a stdin EOF shutdown for the drain timeout only, and that
+// cancellation ends that wait at once.
+func TestServerStdinEOFWaitIsBounded(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		drain  time.Duration
+		cancel bool
+	}{
+		{name: "drain timeout", drain: 100 * time.Millisecond},
+		{name: "cancellation", drain: time.Minute, cancel: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := start(t, &options{drainTimeout: tt.drain, writeTimeout: time.Minute})
+			c := f.dial()
+
+			c.sendCommand(t, "stopHar", nil)
+			cmd := f.ext.read(t)
+
+			writeFrame(t, f.stdin, []byte(fmt.Sprintf(`{"id":%q,"success":true,"result":%q}`, cmd.ID, strings.Repeat("z", 4<<20))))
+
+			if err := f.stdin.Close(); err != nil {
+				t.Fatalf("close stdin: %v", err)
+			}
+
+			// the pump logs EOF right before Run starts waiting on the reply
+			waitFor(t, "stdin EOF", func() bool {
+				return strings.Contains(f.logs.String(), "extension disconnected (eof)")
+			})
+
+			began := time.Now()
+
+			if tt.cancel {
+				f.cancel()
+			}
+
+			if err := f.wait(); err != nil {
+				t.Errorf("Run() = %v, want nil", err)
+			}
+
+			if elapsed := time.Since(began); elapsed > 500*time.Millisecond {
+				t.Errorf("shutdown took %s with an unread reply, want under 500ms", elapsed)
+			}
+		})
+	}
+}
+
+// TestServerFramingErrorSkipsReplyWait pins that a fatal stdin error does not
+// wait for replies still being written: only a clean EOF waits.
+func TestServerFramingErrorSkipsReplyWait(t *testing.T) {
+	t.Parallel()
+
+	f := start(t, &options{drainTimeout: time.Minute, writeTimeout: time.Minute})
+	c := f.dial()
+
+	c.sendCommand(t, "stopHar", nil)
+	cmd := f.ext.read(t)
+
+	writeFrame(t, f.stdin, []byte(fmt.Sprintf(`{"id":%q,"success":true,"result":%q}`, cmd.ID, strings.Repeat("z", 4<<20))))
+
+	if _, err := f.stdin.Write(append(header(64), []byte("{}")...)); err != nil {
+		t.Fatalf("write partial frame: %v", err)
+	}
+
+	began := time.Now()
+
+	if err := f.stdin.Close(); err != nil {
+		t.Fatalf("close stdin: %v", err)
+	}
+
+	if err := f.wait(); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("Run() = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+
+	if elapsed := time.Since(began); elapsed > 500*time.Millisecond {
+		t.Errorf("shutdown took %s on a framing error, want under 500ms", elapsed)
 	}
 }
 

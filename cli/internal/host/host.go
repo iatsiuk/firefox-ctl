@@ -32,8 +32,8 @@ const (
 	DefaultIdleTimeout = 60 * time.Second
 	// DefaultMaxConnections bounds concurrently served CLI clients.
 	DefaultMaxConnections = 10
-	// DefaultWriteTimeout bounds a reply write so a client that stopped
-	// reading can never block the extension message pump or shutdown.
+	// DefaultWriteTimeout bounds each chunk of a reply write so a client that
+	// stopped reading is cut and can never hold its connection or shutdown.
 	DefaultWriteTimeout = 5 * time.Second
 )
 
@@ -88,6 +88,9 @@ type Server struct {
 	pending map[string]*request
 	conns   map[*clientConn]struct{}
 	closing bool
+
+	// extension replies in flight to any client, written off the pump
+	replies sync.WaitGroup
 }
 
 // request is one forwarded command awaiting an extension response.
@@ -101,6 +104,9 @@ type request struct {
 type clientConn struct {
 	nc  net.Conn
 	ids map[string]struct{}
+
+	// replies being written to this client; encoding is not counted
+	writes sync.WaitGroup
 
 	mu     sync.Mutex
 	closed bool
@@ -201,6 +207,10 @@ func (s *Server) Run(ctx context.Context, ln net.Listener, stdin io.Reader, stdo
 
 	select {
 	case err = <-stdinDone:
+		// only a clean EOF waits; a framing error is fatal like any other
+		if err == nil {
+			s.awaitReplies(ctx)
+		}
 	case err = <-s.fatal:
 	case <-ctx.Done():
 	}
@@ -211,6 +221,28 @@ func (s *Server) Run(ctx context.Context, ln net.Listener, stdin io.Reader, stdo
 	<-acceptDone
 
 	return err
+}
+
+// awaitReplies lets the replies the pump handed off before stdin ended reach
+// their clients before closeClients cuts the sockets. The pump is gone, so no
+// reply joins the wait; a slow reader holds shutdown for drainTimeout at most
+// and cancellation ends the wait at once.
+func (s *Server) awaitReplies(ctx context.Context) {
+	done := make(chan struct{})
+
+	go func() {
+		s.replies.Wait()
+		close(done)
+	}()
+
+	t := time.NewTimer(s.drainTimeout)
+	defer t.Stop()
+
+	select {
+	case <-done:
+	case <-t.C:
+	case <-ctx.Done():
+	}
 }
 
 // accept serves connections until ctx is done or the listener is closed. The
@@ -270,6 +302,8 @@ func (s *Server) serve(nc net.Conn) {
 	s.conns[c] = struct{}{}
 	s.mu.Unlock()
 
+	// closing first makes a reply still being written fail at once
+	defer c.writes.Wait()
 	defer s.closeClient(c)
 
 	s.armIdle(c)
@@ -447,6 +481,24 @@ func (s *Server) take(id string) *request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.takeLocked(id)
+}
+
+// claim takes a pending request for a reply written off the message pump and
+// counts it for awaitReplies.
+func (s *Server) claim(id string) *request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	req := s.takeLocked(id)
+	if req != nil {
+		s.replies.Add(1)
+	}
+
+	return req
+}
+
+func (s *Server) takeLocked(id string) *request {
 	req, ok := s.pending[id]
 	if !ok {
 		return nil
@@ -477,6 +529,12 @@ func (s *Server) reply(c *clientConn, resp protocol.ClientResponse) {
 
 		return
 	}
+
+	// only the write is counted, never the encoding: closeClient sets closed
+	// under c.mu before serve waits, so no write joins after the wait began,
+	// and shutdown waits for a write that fails at once on the closed socket
+	c.writes.Add(1)
+	defer c.writes.Done()
 
 	writeErr := writeLine(c.nc, line, s.writeTimeout)
 
@@ -530,9 +588,9 @@ func encodeLine(resp protocol.ClientResponse) ([]byte, error) {
 }
 
 // writeLine writes line in chunks, each under its own deadline: a client that
-// keeps reading gets a reply of any size, one that stalls for timeout is cut,
-// so it can never wedge the single-threaded extension message pump. A chunk
-// that times out half-written is a stall too, the line cannot be resumed.
+// keeps reading gets a reply of any size, one that stalls for timeout is cut.
+// A chunk that times out half-written is a stall too, the line cannot be
+// resumed.
 func writeLine(nc net.Conn, line []byte, timeout time.Duration) error {
 	for len(line) > 0 {
 		n := min(len(line), writeChunkSize)
@@ -634,12 +692,15 @@ func (s *Server) readExtension(stdin io.Reader) error {
 
 func (s *Server) handleExtensionMessage(msg *protocol.ExtensionMessage) {
 	if msg.ID != "" && msg.Success != nil {
-		if req := s.take(msg.ID); req != nil {
-			s.reply(req.conn, protocol.ClientResponse{
-				Success: *msg.Success,
-				Result:  msg.Result,
-				Error:   msg.Error,
-			})
+		if req := s.claim(msg.ID); req != nil {
+			resp := protocol.ClientResponse{Success: *msg.Success, Result: msg.Result, Error: msg.Error}
+
+			// a client reading a large reply slowly holds only its own writer,
+			// never the pump the other clients' replies come through
+			go func() {
+				defer s.replies.Done()
+				s.reply(req.conn, resp)
+			}()
 
 			return
 		}

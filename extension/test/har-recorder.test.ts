@@ -5,9 +5,9 @@
 import { describe, expect, test } from "bun:test"
 
 import type { CertificateInfo, RequestBody, RequestDetails, SecurityInfo } from "../src/browser"
-import type { HarEntry, HarRecording } from "../src/har"
+import type { Har, HarEntry, HarRecording } from "../src/har"
 import { buildLog } from "../src/har"
-import { HarRecorder, type StartOptions } from "../src/har-recorder"
+import { HAR_KEEP_MS, HarRecorder, type StartOptions } from "../src/har-recorder"
 import { FakeBrowser, FakeEnvironment, type FakeStreamFilter } from "./fakes"
 
 const TAB_ID = 1
@@ -19,6 +19,7 @@ const ALL_URLS = ["<all_urls>"]
 
 interface Harness {
   browser: FakeBrowser
+  env: FakeEnvironment
   recorder: HarRecorder
   /** Moves the clock the event emitters stamp with. */
   at(ms: number): void
@@ -38,6 +39,7 @@ function harness(): Harness {
   }
   return {
     browser,
+    env,
     recorder,
     at: (ms) => {
       clock = ms
@@ -208,6 +210,94 @@ describe("HarRecorder start and stop", () => {
     h.start()
     h.stop()
     expect(() => h.stop()).toThrow(`HAR_NOT_RECORDING: no HAR recording on tab ${TAB_ID}`)
+  })
+
+  test("a kept HAR stays while it is built and for HAR_KEEP_MS after", async () => {
+    const h = harness()
+    h.start()
+    const har = Promise.resolve(buildLog(h.stop()))
+    h.recorder.keep(TAB_ID, har)
+    expect(h.recorder.kept(TAB_ID)).toBe(har)
+    expect(h.recorder.kept(OTHER_TAB_ID)).toBeUndefined()
+    await har
+    h.env.advance(HAR_KEEP_MS - 1)
+    expect(h.recorder.kept(TAB_ID)).toBe(har)
+    h.env.advance(1)
+    expect(h.recorder.kept(TAB_ID)).toBeUndefined()
+  })
+
+  test("a HAR still being built is kept however long it takes", () => {
+    const h = harness()
+    h.start()
+    h.stop()
+    const building = new Promise<Har>(() => {})
+    h.recorder.keep(TAB_ID, building)
+    h.env.advance(10 * HAR_KEEP_MS)
+    expect(h.recorder.kept(TAB_ID)).toBe(building)
+  })
+
+  test("a failed build is kept like a HAR", async () => {
+    const h = harness()
+    h.start()
+    h.stop()
+    const failed = Promise.reject(new Error("HAR_TOO_LARGE: too large"))
+    h.recorder.keep(TAB_ID, failed)
+    await failed.catch(() => undefined)
+    expect(h.recorder.kept(TAB_ID)).toBe(failed)
+    h.env.advance(HAR_KEEP_MS)
+    expect(h.recorder.kept(TAB_ID)).toBeUndefined()
+  })
+
+  test("the next recording of the tab releases its kept HAR", () => {
+    const h = harness()
+    h.start()
+    h.recorder.keep(TAB_ID, Promise.resolve(buildLog(h.stop())))
+    h.start()
+    expect(h.recorder.kept(TAB_ID)).toBeUndefined()
+  })
+
+  test("the next recording cancels the kept HAR's expiry", async () => {
+    const h = harness()
+    h.start()
+    const har = Promise.resolve(buildLog(h.stop()))
+    h.recorder.keep(TAB_ID, har)
+    await har
+    const timers = h.env.pendingTimers()
+    h.start()
+    expect(h.env.pendingTimers()).toBe(timers - 1)
+  })
+
+  test("a HAR released while it is built sets no expiry", async () => {
+    const h = harness()
+    h.start()
+    const log = buildLog(h.stop())
+    let finish: (har: Har) => void = () => undefined
+    const building = new Promise<Har>((resolve) => {
+      finish = resolve
+    })
+    h.recorder.keep(TAB_ID, building)
+    h.start()
+    const timers = h.env.pendingTimers()
+    finish(log)
+    await building
+    expect(h.env.pendingTimers()).toBe(timers)
+  })
+
+  test("an older HAR's expiry leaves a newer HAR of the tab kept", async () => {
+    const h = harness()
+    h.start()
+    const older = Promise.resolve(buildLog(h.stop()))
+    h.recorder.keep(TAB_ID, older)
+    await older
+    h.env.advance(HAR_KEEP_MS / 2)
+    h.start()
+    const newer = Promise.resolve(buildLog(h.stop()))
+    h.recorder.keep(TAB_ID, newer)
+    await newer
+    h.env.advance(HAR_KEEP_MS / 2)
+    expect(h.recorder.kept(TAB_ID)).toBe(newer)
+    h.env.advance(HAR_KEEP_MS / 2)
+    expect(h.recorder.kept(TAB_ID)).toBeUndefined()
   })
 
   test("a second tab records independently", () => {
@@ -1012,6 +1102,7 @@ describe("HarRecorder response body limits", () => {
     respond(h, req({ requestId: "r1" }), "abcd")
     const crossing = respond(h, req({ requestId: "r2" }), "wxyz")
     void h.browser.emitRequestStarted(req({ requestId: "r3" }))
+    void h.browser.emitHeadersReceived({ ...req({ requestId: "r3" }), statusCode: 200 })
     expect(h.browser.streamFilterFor("r3")).toBeUndefined()
     expect(crossing.status).toBe("disconnected")
     expect(text(crossing.pageData())).toBe("wxyz")
@@ -1024,10 +1115,61 @@ describe("HarRecorder response body limits", () => {
     expect(third?.text).toBeUndefined()
   })
 
+  test("a spent budget drops nothing from responses that have no body", () => {
+    const h = harness()
+    h.start({ maxBodySize: 4, bodyBudget: 4 })
+    respond(h, req({ requestId: "spend" }), "abcd")
+    complete(h, req({ requestId: "head", method: "HEAD" }), 1000)
+    complete(h, req({ requestId: "empty" }), 1100, 204)
+    complete(h, req({ requestId: "same" }), 1200, 304)
+    const hop = req({ requestId: "moved", url: "http://example.com/" })
+    void h.browser.emitRequestStarted(hop)
+    h.browser.emitRedirect({ ...hop, statusCode: 301, redirectUrl: "https://example.com/" })
+    complete(h, req({ requestId: "moved", url: "https://example.com/" }), 1300)
+    const log = buildLog(h.stop()).log
+    const dropped = log.entries.map((entry) => entry.response.content._bodyDropped === true)
+    expect(dropped).toEqual([false, false, false, false, false, true])
+    expect(log._recording.droppedBodies).toBe(1)
+  })
+
+  test("a spent budget drops nothing from a request that never got a response", () => {
+    const h = harness()
+    h.start({ maxBodySize: 4, bodyBudget: 4 })
+    respond(h, req({ requestId: "spend" }), "abcd")
+    const failed = req({ requestId: "dns", url: "https://nowhere.invalid/" })
+    void h.browser.emitRequestStarted(failed)
+    h.browser.emitRequestFailed({ ...failed, error: "NS_ERROR_UNKNOWN_HOST" })
+    const log = buildLog(h.stop()).log
+    const entry = log.entries[1]
+    expect(entry?.response.status).toBe(0)
+    expect(entry?.response.content._bodyDropped).toBeUndefined()
+    expect(log._recording.droppedBodies).toBe(0)
+  })
+
+  test("a filter whose first data meets a spent budget is dropped, not truncated", () => {
+    const h = harness()
+    h.start({ maxBodySize: 4, bodyBudget: 4 })
+    textRequest(h, req({ requestId: "late" }))
+    respond(h, req({ requestId: "spend" }), "abcd")
+    const late = filterOf(h, "late")
+    late.pushStart()
+    late.pushData("wxyz")
+    expect(late.status).toBe("disconnected")
+    expect(text(late.pageData())).toBe("wxyz")
+    h.browser.emitRequestCompleted(req({ requestId: "late" }))
+    const log = buildLog(h.stop()).log
+    const content = log.entries[0]?.response.content
+    expect(content?._bodyDropped).toBe(true)
+    expect(content?._truncated).toBeUndefined()
+    expect(content?.text).toBeUndefined()
+    expect(log._recording).toMatchObject({ truncatedBodies: 0, droppedBodies: 1 })
+  })
+
   test("request bodies spend the budget responses share", () => {
     const h = harness()
     h.start({ maxBodySize: 4, bodyBudget: 4 })
     void h.browser.emitRequestStarted({ ...req(), method: "POST", requestBody: rawBody("abcd") })
+    void h.browser.emitHeadersReceived({ ...req(), method: "POST", statusCode: 200 })
     expect(h.browser.streamFilters).toHaveLength(0)
     expect(h.entries()[0]?.response.content._bodyDropped).toBe(true)
   })

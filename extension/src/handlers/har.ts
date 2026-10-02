@@ -1,8 +1,8 @@
 // The HAR commands. Both answer from the background page: the recorder lives
 // there, so neither goes through the content script.
 
-import type { Handler } from "../dispatch"
-import type { Har } from "../har"
+import type { Handler, HandlerDeps } from "../dispatch"
+import type { Har, HarRecording } from "../har"
 import { buildLog, fitLog, redactEntry } from "../har"
 import { BODY_BUDGET, MAX_BODY_DEFAULT } from "../har-recorder"
 import type { JsonObject, JsonValue } from "../protocol"
@@ -39,31 +39,45 @@ export const startHar: Handler = async (params, deps) => {
 
 /**
  * The tab whose recording stops. A recording outlives its tab, so an explicit
- * tabId that still records answers before the tab is looked up.
+ * tabId that still records, or whose HAR is kept, answers before the tab is
+ * looked up.
  */
 async function recordedTab(deps: TabsDeps, params: JsonObject): Promise<number> {
   if (params.tabId !== undefined && params.tabId !== null) {
     const tabId = parseTabId(params.tabId)
-    if (deps.har.isRecording(tabId)) {
+    if (deps.har.isRecording(tabId) || deps.har.kept(tabId) !== undefined) {
       return tabId
     }
   }
   return idOf(await resolveTargetTab(deps, params))
 }
 
+/** The stopped recording's HAR: redacted unless the user opted out, fitted to `limitBytes`. */
+async function harOf(recording: HarRecording, deps: HandlerDeps, limitBytes: number): Promise<Har> {
+  const redact = await redactHeadersOrDefault(deps.browser)
+  const har = buildLog(recording)
+  const shown: Har = redact
+    ? { log: { ...har.log, entries: har.log.entries.map(redactEntry) } }
+    : har
+  return fitLog(shown, limitBytes)
+}
+
 /**
  * stopHar with its reply fitted to `limitBytes`. The recording is handed over
- * before anything can fail, so even HAR_TOO_LARGE releases its memory.
+ * before anything can fail, so even HAR_TOO_LARGE releases its memory. The
+ * HAR is kept from the moment the recording stops, so a stopHar whose reply
+ * was lost, timed out or still building, is answered by the next one.
  */
 export function stopHarWithin(limitBytes: number): Handler {
   return async (params, deps) => {
-    const recording = deps.har.stop(await recordedTab(deps, params))
-    const redact = await redactHeadersOrDefault(deps.browser)
-    const har = buildLog(recording)
-    const shown: Har = redact
-      ? { log: { ...har.log, entries: har.log.entries.map(redactEntry) } }
-      : har
-    return fitLog(shown, limitBytes) as unknown as JsonValue
+    const tabId = await recordedTab(deps, params)
+    const kept = deps.har.kept(tabId)
+    if (kept !== undefined) {
+      return (await kept) as unknown as JsonValue
+    }
+    const har = harOf(deps.har.stop(tabId), deps, limitBytes)
+    deps.har.keep(tabId, har)
+    return (await har) as unknown as JsonValue
   }
 }
 

@@ -23,6 +23,7 @@ import type {
 } from "./browser"
 import type { Environment } from "./env"
 import type {
+  Har,
   HarRecording,
   HarSecurityInfo,
   HopRecord,
@@ -39,6 +40,9 @@ export const MAX_BODY_DEFAULT = 10 * 1024 * 1024
 
 /** Stored body bytes, request and response alike, one recording may hold. */
 export const BODY_BUDGET = 160 * 1024 * 1024
+
+/** How long a stopped tab's HAR, or its failure, is answered again once built. */
+export const HAR_KEEP_MS = 5 * 60 * 1000
 
 export interface StartOptions {
   /** Bytes kept per body; 0 records metadata only. */
@@ -99,6 +103,12 @@ const ALL_URLS = ["<all_urls>"]
 export class HarRecorder {
   private readonly recordings = new Map<number, Recording>()
 
+  // stopped HARs, built or still building, for a stopHar whose reply was lost
+  private readonly stopped = new Map<number, Promise<Har>>()
+
+  // the expiry timer of each kept HAR, cancelled when the HAR is released early
+  private readonly expiries = new Map<number, number>()
+
   private browser?: Browser
 
   constructor(private readonly env: Environment) {}
@@ -125,6 +135,29 @@ export class HarRecorder {
 
   isRecording(tabId: number): boolean {
     return this.recordings.has(tabId)
+  }
+
+  /**
+   * Holds a stopped tab's HAR while it is built and HAR_KEEP_MS after. No
+   * reply is ever known to have reached the client, so the HAR is never
+   * released on answering. A HAR released before it is built sets no expiry,
+   * so no timer holds on to a HAR the map let go.
+   */
+  keep(tabId: number, har: Promise<Har>): void {
+    this.forget(tabId)
+    this.stopped.set(tabId, har)
+    const expire = (): void => {
+      if (this.stopped.get(tabId) !== har) {
+        return
+      }
+      const timerId = this.env.setTimeout(() => this.forget(tabId), HAR_KEEP_MS)
+      this.expiries.set(tabId, timerId)
+    }
+    har.then(expire, expire)
+  }
+
+  kept(tabId: number): Promise<Har> | undefined {
+    return this.stopped.get(tabId)
   }
 
   /** Starts recording the tab and answers the start time. */
@@ -166,6 +199,7 @@ export class HarRecorder {
     }
     listen(browser, recording, this.hopListeners(recording))
     this.recordings.set(tabId, recording)
+    this.forget(tabId)
     return start
   }
 
@@ -187,6 +221,16 @@ export class HarRecorder {
       pages: recording.pages.map((page) => page.record),
       hops: recording.hops.map(finish),
     }
+  }
+
+  // drops the tab's kept HAR and cancels its expiry
+  private forget(tabId: number): void {
+    const timerId = this.expiries.get(tabId)
+    if (timerId !== undefined) {
+      this.env.clearTimeout(timerId)
+      this.expiries.delete(tabId)
+    }
+    this.stopped.delete(tabId)
   }
 
   // the data stays until stopHar asks for it
@@ -409,9 +453,15 @@ function captureResponse(recording: Recording, hop: HopRecord): void {
     }
     // past the cap the page gets the rest straight from the channel
     if (length < event.data.byteLength) {
+      filter.disconnect()
+      // nothing stored means the budget was spent before the first byte
+      if (stored === 0) {
+        hop.body = undefined
+        hop.bodyDropped = true
+        return
+      }
       body.truncated = true
       body.size = seen
-      filter.disconnect()
     }
   }
   filter.onstop = () => {

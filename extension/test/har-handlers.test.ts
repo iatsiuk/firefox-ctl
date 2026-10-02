@@ -11,7 +11,7 @@ import { FrameRegistry } from "../src/frames"
 import { REPLY_LIMIT, startHar, stopHar, stopHarWithin } from "../src/handlers/har"
 import { INVALID_TAB_ID } from "../src/handlers/tabs"
 import type { Har } from "../src/har"
-import { HarRecorder } from "../src/har-recorder"
+import { HAR_KEEP_MS, HarRecorder } from "../src/har-recorder"
 import { NetworkTracker } from "../src/network"
 import type { JsonObject, JsonValue } from "../src/protocol"
 import { commandContext } from "../src/protocol"
@@ -30,6 +30,7 @@ const BUDGET_TEXT = "maxBodySize must be an integer between 0 and 167772160"
 
 interface Harness {
   browser: FakeBrowser
+  env: FakeEnvironment
   deps: HandlerDeps
   start(params?: JsonObject): Promise<JsonObject>
   stop(params?: JsonObject): Promise<Har>
@@ -69,6 +70,7 @@ function harness(): Harness {
   session.activeTabId = TAB_ID
   return {
     browser,
+    env,
     deps,
     start: async (params = {}) => (await startHar(params, deps)) as JsonObject,
     stop: async (params = {}) => (await stopHar(params, deps)) as unknown as Har,
@@ -185,7 +187,7 @@ describe("startHar", () => {
 })
 
 describe("stopHar", () => {
-  test("answers the HAR of the session active tab and forgets the recording", async () => {
+  test("answers the HAR of the session active tab and stops the recording", async () => {
     const h = harness()
     await h.start()
     exchange(h.browser, "r1", "hello")
@@ -198,9 +200,62 @@ describe("stopHar", () => {
     expect(har.log.entries[0]?.request.postData?.text).toBe("hello")
     expect(har.log._recording).toMatchObject({ tabId: TAB_ID, droppedBodies: 0, tabClosed: false })
     expect(h.deps.har.isRecording(TAB_ID)).toBe(false)
+  })
+
+  test("a stopped tab answers the same HAR again until HAR_KEEP_MS has passed", async () => {
+    const h = harness()
+    await h.start()
+    exchange(h.browser, "r1", "hello")
+
+    const har = await h.stop()
+
+    h.env.advance(HAR_KEEP_MS - 1)
+    expect(await h.stop()).toBe(har)
+    h.env.advance(1)
     expect(await rejection(stopHar({}, h.deps))).toBe(
       `HAR_NOT_RECORDING: no HAR recording on tab ${TAB_ID}`,
     )
+  })
+
+  test("a stopped tab's HAR is answered again after the tab closed", async () => {
+    const h = harness()
+    await h.start({ tabId: OTHER_TAB_ID })
+    exchange(h.browser, "o1", "other", OTHER_TAB_ID)
+
+    const har = await h.stop({ tabId: OTHER_TAB_ID })
+    h.browser.removeTab(OTHER_TAB_ID)
+
+    expect(await h.stop({ tabId: OTHER_TAB_ID })).toBe(har)
+  })
+
+  test("a stopHar during a stalled redaction read waits for the same HAR", async () => {
+    const h = harness()
+    await h.start({ tabId: OTHER_TAB_ID })
+    exchange(h.browser, "o1", "other", OTHER_TAB_ID)
+    let release = (): void => {}
+    const stalled = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const local = h.browser.storage.local
+    const slow: StorageArea = {
+      get: async (keys) => {
+        await stalled
+        return local.get(keys)
+      },
+      set: (items) => local.set(items),
+      remove: (keys) => local.remove(keys),
+    }
+    const deps = { ...h.deps, browser: { ...h.browser, storage: { local: slow } } }
+
+    const first = stopHar({ tabId: OTHER_TAB_ID }, deps)
+    await Bun.sleep(0)
+    expect(h.deps.har.isRecording(OTHER_TAB_ID)).toBe(false)
+    const retry = stopHar({ tabId: OTHER_TAB_ID }, deps)
+    release()
+
+    const har = (await first) as unknown as Har
+    expect(har.log.entries).toHaveLength(1)
+    expect(await retry).toBe(har as unknown as JsonValue)
   })
 
   test("a tab that never recorded answers HAR_NOT_RECORDING", async () => {
@@ -301,12 +356,12 @@ describe("stopHar", () => {
     const har = (await stopHarWithin(limit)({}, h.deps)) as unknown as Har
 
     expect(replyBytes(har)).toBeLessThanOrEqual(limit)
-    // one entry gave up both its bodies: the request's and the empty response
-    expect(har.log._recording.droppedBodies).toBe(2)
+    // the large request body goes, its empty response has nothing to drop
+    expect(har.log._recording.droppedBodies).toBe(1)
     const [small, large] = har.log.entries
     expect(small?.request.postData?.text).toBe("s")
     expect(large?.request.postData?._bodyDropped).toBe(true)
-    expect(large?.response.content._bodyDropped).toBe(true)
+    expect(large?.response.content._bodyDropped).toBeUndefined()
     expect(h.deps.har.isRecording(TAB_ID)).toBe(false)
   })
 
@@ -319,6 +374,8 @@ describe("stopHar", () => {
 
     expect(text).toMatch(/^HAR_TOO_LARGE: HAR is \d+ bytes without bodies, the limit is 100$/)
     expect(h.deps.har.isRecording(TAB_ID)).toBe(false)
+    expect(await rejection(stopHar({}, h.deps))).toBe(text)
+    h.env.advance(HAR_KEEP_MS)
     expect(await rejection(stopHar({}, h.deps))).toBe(
       `HAR_NOT_RECORDING: no HAR recording on tab ${TAB_ID}`,
     )

@@ -594,12 +594,19 @@ raw.
   page gets the rest straight from the network and the entry carries `_truncated: true`. `0`
   records metadata only: no stream filters and no request bodies
 - Each recording stores at most 160 MiB of body bytes, request and response together. Once
-  that budget is spent, later bodies are not stored and carry `_bodyDropped: true`
+  that budget is spent, later bodies are not stored and carry `_bodyDropped: true`; a response
+  that has no body (`HEAD`, 1xx, 204, 304, a redirect hop, `Content-Length: 0`) or never came
+  (a request that failed or was still waiting for its status) carries no marker
 - The reply must fit the host's 256 MiB frame cap less 64 KiB for the envelope. A HAR that does
   not loses its largest bodies first, each marked `_bodyDropped: true` and counted in
-  `_recording.droppedBodies`; only a HAR too large without any body fails with
-  `HAR_TOO_LARGE: HAR is <n> bytes without bodies, the limit is <limit>`. Either way the
-  recording is gone after `stopHar`
+  `_recording.droppedBodies`, an empty body is left as it is; only a HAR too large without
+  any body fails with `HAR_TOO_LARGE: HAR is <n> bytes without bodies, the limit is <limit>`.
+  Either way the recording is gone after `stopHar`
+- A `stopHar` whose reply is lost after the recording stopped (`COMMAND_TIMEOUT`, a host
+  restart) does not lose the HAR: it is kept from the moment the recording stops, and every
+  `stopHar` of that tab answers the same HAR, or the same `HAR_TOO_LARGE`, waiting for it while
+  it is still being built. It is released 5 minutes after it is built, or by the next
+  `startHar` of that tab
 - Response bodies come through `webRequest.filterResponseData`: every chunk is passed to the
   page unchanged before it is stored, and `stopHar` releases every filter of the recording, so
   a request still loading finishes in the page without the recorder

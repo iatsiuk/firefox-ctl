@@ -582,15 +582,18 @@ export interface ResponseSizeInput {
   truncated: boolean
 }
 
-/** `response.bodySize` and `headersSize`, which webRequest never knows. */
-export function responseSizes(input: ResponseSizeInput): { bodySize: number; headersSize: number } {
-  const { method, status } = input
-  if (
+function bodiless(method: string, status: number): boolean {
+  return (
     method.toUpperCase() === "HEAD" ||
     (status >= 100 && status < 200) ||
     status === 204 ||
     status === 304
-  ) {
+  )
+}
+
+/** `response.bodySize` and `headersSize`, which webRequest never knows. */
+export function responseSizes(input: ResponseSizeInput): { bodySize: number; headersSize: number } {
+  if (bodiless(input.method, input.status)) {
     return { bodySize: 0, headersSize: -1 }
   }
   const length = input.complete && !input.truncated ? contentLength(input.headers) : null
@@ -663,13 +666,29 @@ function page(record: PageRecord): HarPage {
   }
 }
 
+/**
+ * A budget drop is decided before the response is known, so it counts only
+ * for a response that came and could carry a body: not a request that failed
+ * before any status, not a redirect hop, not a bodiless method or status, not
+ * a Content-Length of 0.
+ */
+function droppedBody(hop: HopRecord): boolean {
+  return (
+    hop.bodyDropped === true &&
+    hop.statusCode !== undefined &&
+    hop.redirectUrl === undefined &&
+    !bodiless(hop.method, hop.statusCode ?? 0) &&
+    contentLength(hop.responseHeaders) !== 0
+  )
+}
+
 // the chunks are dropped as soon as the text or base64 form exists
 function content(hop: HopRecord): HarContent {
   const body = hop.body
   if (body === undefined) {
     return responseContent(undefined, hop.responseHeaders, {
       complete: true,
-      dropped: hop.bodyDropped,
+      dropped: droppedBody(hop),
     })
   }
   const total = body.chunks.reduce((sum, chunk) => sum + chunk.length, 0)
@@ -678,7 +697,7 @@ function content(hop: HopRecord): HarContent {
   return responseContent(data, hop.responseHeaders, {
     complete: body.complete,
     truncated: body.truncated,
-    dropped: hop.bodyDropped,
+    dropped: droppedBody(hop),
     error: body.error,
     size: body.size,
   })
@@ -795,11 +814,17 @@ export function buildLog(recording: HarRecording): Har {
   }
 }
 
+// an empty text or params list stays: dropping it saves nothing
+function filledText(text: string | undefined): boolean {
+  return text !== undefined && text !== ""
+}
+
+function filledPost(post: HarPostData | undefined): boolean {
+  return post !== undefined && (filledText(post.text) || (post.params?.length ?? 0) > 0)
+}
+
 function hasPayload(e: HarEntry): boolean {
-  const post = e.request.postData
-  return (
-    e.response.content.text !== undefined || post?.text !== undefined || post?.params !== undefined
-  )
+  return filledText(e.response.content.text) || filledPost(e.request.postData)
 }
 
 /** The entry without body payloads, and how many bodies that removed. */
@@ -807,13 +832,13 @@ function shell(e: HarEntry): { entry: HarEntry; bodies: number } {
   let bodies = 0
   const response = { ...e.response }
   const { text, encoding: _encoding, ...content } = e.response.content
-  if (text !== undefined) {
+  if (filledText(text)) {
     response.content = { ...content, _bodyDropped: true }
     bodies++
   }
   const request = { ...e.request }
   const post = e.request.postData
-  if (post !== undefined && (post.text !== undefined || post.params !== undefined)) {
+  if (post !== undefined && filledPost(post)) {
     const { text: _text, params: _params, ...rest } = post
     request.postData = { ...rest, _bodyDropped: true }
     bodies++

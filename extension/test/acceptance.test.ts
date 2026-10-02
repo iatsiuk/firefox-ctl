@@ -1440,9 +1440,8 @@ describe("a HAR recording through the port", () => {
     expect(failed._error).toBe("NS_ERROR_NET_RESET")
     expect(failed.response.content._bodyError).toBe("NS_ERROR_NET_RESET")
     expect(log._recording).toMatchObject({ tabId: HAR_TAB, droppedBodies: 0, pendingEntries: 0 })
-    expect(await failure(port, "stopHar", { tabId: HAR_TAB })).toBe(
-      `HAR_NOT_RECORDING: no HAR recording on tab ${HAR_TAB}`,
-    )
+    // a reply the client may have missed is answered again
+    expect(await stoppedHar(port)).toEqual(har)
   })
 
   test("a reply over the limit comes back with the largest bodies dropped", async () => {
