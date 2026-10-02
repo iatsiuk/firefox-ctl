@@ -4,6 +4,7 @@ import { CaptureLocks } from "../src/capture-locks"
 import type { Services } from "../src/dispatch"
 import { createDispatcher, Dispatcher, describeTabError } from "../src/dispatch"
 import { FrameRegistry } from "../src/frames"
+import { HarRecorder } from "../src/har-recorder"
 import { NetworkTracker } from "../src/network"
 import type { CommandName, HostCommand, JsonObject } from "../src/protocol"
 import { ExtensionError } from "../src/protocol"
@@ -31,6 +32,7 @@ function deps(browser: FakeBrowser, env: FakeEnvironment): Services {
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
     frames: new FrameRegistry(env),
+    har: new HarRecorder(env),
     readiness: waitForPageReady,
   }
 }

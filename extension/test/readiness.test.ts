@@ -8,6 +8,7 @@ import { AttachedTabs } from "../src/attached"
 import { CaptureLocks } from "../src/capture-locks"
 import type { Services } from "../src/dispatch"
 import { FrameRegistry } from "../src/frames"
+import { HarRecorder } from "../src/har-recorder"
 import type { NetworkTracker, TabNetworkStatus } from "../src/network"
 import { NetworkTracker as Tracker } from "../src/network"
 import type { CommandContext, JsonObject, JsonValue } from "../src/protocol"
@@ -83,6 +84,7 @@ function harness(options: HarnessOptions = {}): Harness {
     network,
     captureLocks: new CaptureLocks(),
     frames: new FrameRegistry(env),
+    har: new HarRecorder(env),
     readiness: waitForPageReady,
   }
   const budgetMs = options.budgetMs ?? 30000

@@ -7,6 +7,7 @@ import { AttachedTabs } from "../src/attached"
 import { CaptureLocks } from "../src/capture-locks"
 import { createDispatcher, Dispatcher } from "../src/dispatch"
 import { FrameRegistry } from "../src/frames"
+import { HarRecorder } from "../src/har-recorder"
 import { NetworkTracker } from "../src/network"
 import type { HostCommand, JsonObject } from "../src/protocol"
 import { commandContext } from "../src/protocol"
@@ -27,6 +28,7 @@ function services(browser: FakeBrowser, env: FakeEnvironment) {
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
     frames: new FrameRegistry(env),
+    har: new HarRecorder(env),
     readiness: waitForPageReady,
   }
 }

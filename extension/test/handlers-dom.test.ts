@@ -9,6 +9,7 @@ import type { HandlerDeps } from "../src/dispatch"
 import { createDispatcher } from "../src/dispatch"
 import { FRAME_PORT_NAME, FrameRegistry } from "../src/frames"
 import { executeInTab, PAGE_COMMANDS, pageHandlers } from "../src/handlers/dom"
+import { HarRecorder } from "../src/har-recorder"
 import { NetworkTracker } from "../src/network"
 import { pageActions } from "../src/page"
 import type { JsonObject } from "../src/protocol"
@@ -62,6 +63,7 @@ function harness(options: { url?: string; active?: boolean } = {}): Harness {
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
     frames,
+    har: new HarRecorder(env),
     readiness: waitForPageReady,
     ctx: commandContext({}, env),
   }

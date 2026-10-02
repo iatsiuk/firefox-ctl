@@ -5,6 +5,7 @@ import type { Browser, Tab } from "../src/browser"
 import { CaptureLocks } from "../src/capture-locks"
 import { FrameRegistry } from "../src/frames"
 import { attachTab, detachTab, listAllTabs } from "../src/handlers/attached"
+import { HarRecorder } from "../src/har-recorder"
 import { NetworkTracker } from "../src/network"
 import type { JsonObject } from "../src/protocol"
 import { commandContext } from "../src/protocol"
@@ -37,6 +38,7 @@ function harness(browser = new FakeBrowser()): Harness {
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
     frames: new FrameRegistry(env),
+    har: new HarRecorder(env),
     readiness: waitForPageReady,
     ctx: commandContext({}, env),
   }

@@ -106,7 +106,8 @@ describe("start", () => {
     const { dispatcher } = start(browser, new FakeEnvironment())
     const { frames } = dispatcher.deps
 
-    expect(browser.framesLoaded.listeners).toHaveLength(1)
+    // the HAR recorder times its pages on the same event
+    expect(browser.framesLoaded.listeners).toHaveLength(2)
     expect(browser.runtimeConnections.listeners).toHaveLength(1)
     expect(browser.tabsRemoved.listeners.length).toBeGreaterThan(removalListeners)
 
@@ -128,6 +129,28 @@ describe("start", () => {
     // and the removal listener drops the watch with the tab
     browser.removeTab(16)
     expect(frames.isWatched(16)).toBe(false)
+  })
+
+  test("attaches the HAR recorder to navigation and tab removal", () => {
+    const browser = new FakeBrowser({
+      tabs: [{ id: 16, windowId: 1, url: "https://example.com/" }],
+    })
+    const { dispatcher } = start(browser, new FakeEnvironment())
+    const { har } = dispatcher.deps
+
+    expect(browser.navigationsStarted.listeners).toHaveLength(1)
+    expect(browser.navigationsCommitted.listeners).toHaveLength(1)
+    expect(browser.navigationsCompleted.listeners).toHaveLength(1)
+
+    har.start(16, { maxBodySize: 0, url: "https://example.com/" })
+    browser.emitBeforeNavigate({ tabId: 16, frameId: 0, url: "https://example.com/next" })
+    browser.removeTab(16)
+    const recording = har.stop(16)
+    expect(recording.tabClosed).toBe(true)
+    expect(recording.pages.map((page) => page.title)).toEqual([
+      "https://example.com/",
+      "https://example.com/next",
+    ])
   })
 
   test("answers an unimplemented command with UNKNOWN_COMMAND", async () => {

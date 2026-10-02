@@ -6,6 +6,7 @@ import { CaptureLocks } from "../src/capture-locks"
 import type { HandlerDeps } from "../src/dispatch"
 import { FrameRegistry } from "../src/frames"
 import { getNetworkRequests } from "../src/handlers/devtools"
+import { HarRecorder } from "../src/har-recorder"
 import { NetworkTracker } from "../src/network"
 import type { JsonObject } from "../src/protocol"
 import { commandContext } from "../src/protocol"
@@ -40,6 +41,7 @@ function harness(): Harness {
     network,
     captureLocks: new CaptureLocks(),
     frames: new FrameRegistry(env),
+    har: new HarRecorder(env),
     readiness: waitForPageReady,
     ctx: commandContext({}, env),
   }

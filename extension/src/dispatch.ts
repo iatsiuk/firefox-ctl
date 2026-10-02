@@ -21,6 +21,7 @@ import {
   resizeWindow,
   setViewport,
 } from "./handlers/window"
+import { HarRecorder } from "./har-recorder"
 import { StateLock } from "./lock"
 import { RestoreMemo } from "./memo"
 import { NetworkTracker } from "./network"
@@ -51,6 +52,8 @@ export interface Services {
   readonly captureLocks: CaptureLocks
   /** Which child frames of which tabs are observed and can answer a command. */
   readonly frames: FrameRegistry
+  /** The tabs that record a HAR, and what each recorded so far. */
+  readonly har: HarRecorder
   /** Injected so a capture can be tested without driving the whole pipeline. */
   readonly readiness: ReadinessCheck
 }
@@ -367,6 +370,7 @@ export function createDispatcher(browser: Browser, env: Environment): Dispatcher
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
     frames: new FrameRegistry(env),
+    har: new HarRecorder(env),
     readiness: waitForPageReady,
   })
   dispatcher.register("ping", ping)

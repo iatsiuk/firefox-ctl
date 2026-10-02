@@ -364,7 +364,8 @@ export function statusText(statusLine: string | undefined): string {
   return STATUS_LINE.exec(statusLine ?? "")?.[2]?.trim() ?? ""
 }
 
-function contentType(headers: HttpHeader[] | undefined): string {
+/** The Content-Type value of the headers, or "". */
+export function contentType(headers: HttpHeader[] | undefined): string {
   const header = (headers ?? []).find((h) => h.name.toLowerCase() === "content-type")
   return header === undefined ? "" : headerValue(header)
 }

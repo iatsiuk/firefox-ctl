@@ -16,7 +16,7 @@ export interface AppHandle {
 
 export function start(browser: Browser, env: Environment): AppHandle {
   const dispatcher = createDispatcher(browser, env)
-  const { session, attached, network, captureLocks, frames } = dispatcher.deps
+  const { session, attached, network, captureLocks, frames, har } = dispatcher.deps
   session.attach()
   attached.attach()
   // the per-tab capture locks are pruned from the same lifecycle event, so a
@@ -28,6 +28,9 @@ export function start(browser: Browser, env: Environment): AppHandle {
   // a watched tab must see the very next child frame load, so the navigation
   // and connect listeners are in place before the first watchFrames arrives
   frames.attach(browser)
+  // a recording keeps its data when its tab closes, and groups its requests
+  // into pages from navigation events of every recorded tab
+  har.attach(browser)
   // kicked off eagerly, untracked, so a background restart sweeps a leftover
   // window even before the first command arrives; no command waits on it -
   // every command's own deadline starts inside handle() below, and prepare()

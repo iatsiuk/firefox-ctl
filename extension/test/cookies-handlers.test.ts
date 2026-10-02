@@ -13,6 +13,7 @@ import {
   resolveCookieStore,
   setCookie,
 } from "../src/handlers/cookies"
+import { HarRecorder } from "../src/har-recorder"
 import { NetworkTracker } from "../src/network"
 import type { JsonObject } from "../src/protocol"
 import { commandContext } from "../src/protocol"
@@ -45,6 +46,7 @@ function harness(tab: Partial<Tab> = { cookieStoreId: "firefox-default" }): Harn
     network: new NetworkTracker(env),
     captureLocks: new CaptureLocks(),
     frames: new FrameRegistry(env),
+    har: new HarRecorder(env),
     readiness: waitForPageReady,
     ctx: commandContext({}, env),
   }
