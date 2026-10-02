@@ -366,7 +366,8 @@ export interface SecurityInfo {
   hsts?: boolean
   hpkp?: boolean
   weaknessReasons?: string[]
-  certificates: CertificateInfo[]
+  // left out on "insecure" and "broken" answers
+  certificates?: CertificateInfo[]
 }
 
 export interface WebRequest {

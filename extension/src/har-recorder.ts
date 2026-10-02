@@ -531,7 +531,7 @@ function securitySummary(info: SecurityInfo): HarSecurityInfo {
     hsts: info.hsts,
     hpkp: info.hpkp,
   })
-  const leaf = info.certificates[0]
+  const leaf = info.certificates?.[0]
   if (leaf !== undefined) {
     summary.certificate = {
       subject: leaf.subject,

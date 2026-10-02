@@ -825,7 +825,7 @@ export class FakeBrowser implements Browser {
   failFilterResponseData?: string
   // what getSecurityInfo answers inside a blocking onHeadersReceived; an
   // Error rejects
-  securityInfo: SecurityInfo | Error = { state: "insecure", certificates: [] }
+  securityInfo: SecurityInfo | Error = { state: "insecure" }
   now: () => number
   currentWindowId = 1
   allowedIncognitoAccess: boolean

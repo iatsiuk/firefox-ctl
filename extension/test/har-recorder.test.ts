@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test"
 
-import type { RequestBody, RequestDetails, SecurityInfo } from "../src/browser"
+import type { CertificateInfo, RequestBody, RequestDetails, SecurityInfo } from "../src/browser"
 import type { HarEntry, HarRecording } from "../src/har"
 import { buildLog } from "../src/har"
 import { HarRecorder, type StartOptions } from "../src/har-recorder"
@@ -1186,7 +1186,7 @@ describe("HarRecorder stream filter release", () => {
 const VALID_FROM = Date.UTC(2026, 0, 1)
 const VALID_TO = Date.UTC(2027, 0, 1)
 
-function certificate(subject: string): SecurityInfo["certificates"][number] {
+function certificate(subject: string): CertificateInfo {
   return {
     subject: `CN=${subject}`,
     issuer: "CN=Example CA",
@@ -1249,7 +1249,6 @@ describe("HarRecorder TLS summary", () => {
     h.browser.securityInfo = {
       state: "broken",
       errorMessage: "SSL_ERROR_BAD_CERT",
-      certificates: [],
     }
     void h.browser.emitRequestStarted(req())
     await h.browser.emitHeadersReceived({ ...req(), statusCode: 200 })
