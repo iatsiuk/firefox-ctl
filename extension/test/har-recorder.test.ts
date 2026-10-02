@@ -788,6 +788,42 @@ describe("HarRecorder pages", () => {
     })
   }
 
+  // firefox fires onBeforeNavigate again before a cross-process commit
+  test("a repeated onBeforeNavigate of a navigation in flight stays on its page", () => {
+    const h = harness()
+    h.start()
+    const hop = req({ requestId: "nav", url: "https://example.com/go", type: "main_frame" })
+    h.at(1000)
+    void h.browser.emitRequestStarted(hop)
+    h.browser.emitBeforeNavigate({ tabId: TAB_ID, frameId: 0, url: hop.url })
+    h.browser.emitRedirect({ ...hop, redirectUrl: "https://example.com/html" })
+    h.at(1010)
+    void h.browser.emitRequestStarted({ ...hop, url: "https://example.com/html" })
+    h.at(1900)
+    h.browser.emitBeforeNavigate({ tabId: TAB_ID, frameId: 0, url: "https://example.com/html" })
+    h.at(1902)
+    h.browser.emitCommitted({ tabId: TAB_ID, frameId: 0, url: "https://example.com/html" })
+    h.at(1910)
+    void h.browser.emitRequestStarted(req({ requestId: "icon", type: "image" }))
+    h.at(2000)
+    h.browser.emitFrameLoaded({ tabId: TAB_ID, frameId: 0, url: "https://example.com/html" })
+    h.at(2100)
+    h.browser.emitNavigationCompleted({
+      tabId: TAB_ID,
+      frameId: 0,
+      url: "https://example.com/html",
+    })
+    h.at(3000)
+    navigate(h, "next", "https://example.com/next", ["request", "before", "before", "committed"])
+    const log = buildLog(h.stop()).log
+    expect(log.pages.map((p) => [p.id, p.title, p.pageTimings])).toEqual([
+      ["page_1", TAB_URL, { onContentLoad: -1, onLoad: -1 }],
+      ["page_2", "https://example.com/html", { onContentLoad: 1000, onLoad: 1100 }],
+      ["page_3", "https://example.com/next", { onContentLoad: -1, onLoad: -1 }],
+    ])
+    expect(log.entries.map((e) => e.pageref)).toEqual(["page_2", "page_2", "page_2", "page_3"])
+  })
+
   test("a navigation without a request leaves the next navigation's document on its own page", () => {
     const h = harness()
     h.start()

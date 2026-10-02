@@ -353,6 +353,10 @@ function withoutFragment(url: string): string {
 function bindPage(recording: Recording, side: NavigationSide, stamp: number, url: string): Page {
   const last = recording.pages.at(-1)
   const key = withoutFragment(url)
+  // firefox fires onBeforeNavigate again before a cross-process commit
+  if (side === "before" && last?.before && !last.committed && last.urls.has(key)) {
+    return last
+  }
   const page =
     last !== undefined && !last[side] && (last.urls.size === 0 || last.urls.has(key))
       ? last
