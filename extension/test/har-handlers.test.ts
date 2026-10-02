@@ -18,7 +18,7 @@ import { commandContext } from "../src/protocol"
 import { waitForPageReady } from "../src/readiness"
 import { replyBytes } from "../src/reply"
 import { Session } from "../src/session"
-import { writeRedactHeaders } from "../src/settings"
+import { writeHarEnabled, writeRedactHeaders } from "../src/settings"
 import { FakeBrowser, FakeEnvironment } from "./fakes"
 
 const TAB_ID = 1
@@ -36,9 +36,11 @@ interface Harness {
   stop(params?: JsonObject): Promise<Har>
 }
 
-/** A managed window whose active tab is TAB_ID, plus a user tab. */
-function harness(): Harness {
+/** A managed window whose active tab is TAB_ID, plus a user tab; HAR recording is enabled. */
+function harness({ harEnabled = true } = {}): Harness {
   const browser = new FakeBrowser({ manifestVersion: "9.8.7", now: () => START })
+  // the fake storage writes synchronously, so the opt-in is in place on return
+  void writeHarEnabled(browser, harEnabled)
   const env = new FakeEnvironment({ now: START })
   const session = new Session(browser, env)
   const har = new HarRecorder(env)
@@ -119,6 +121,55 @@ function exchange(browser: FakeBrowser, requestId: string, body: string, tabId =
 function headerValue(headers: { name: string; value: string }[], name: string): string {
   return headers.find((h) => h.name === name)?.value ?? "missing"
 }
+
+const HAR_DISABLED_TEXT =
+  "HAR_DISABLED: HAR recording is disabled; enable it in the add-on preferences " +
+  "(about:addons > Terminal Control for Firefox > Preferences)"
+
+describe("startHar opt-in", () => {
+  test("is refused until the preferences opt-in is stored, and nothing records", async () => {
+    const h = harness({ harEnabled: false })
+
+    expect(await rejection(startHar({}, h.deps))).toBe(HAR_DISABLED_TEXT)
+    expect(h.deps.har.isRecording(TAB_ID)).toBe(false)
+
+    await writeHarEnabled(h.browser, true)
+    expect(await h.start()).toMatchObject({ tabId: TAB_ID })
+  })
+
+  test("the opt-in is checked before the params and the tab", async () => {
+    const h = harness({ harEnabled: false })
+
+    expect(await rejection(startHar({ maxBodySize: -1, tabId: 99 }, h.deps))).toBe(
+      HAR_DISABLED_TEXT,
+    )
+  })
+
+  test("an unreadable setting keeps recording off", async () => {
+    const h = harness()
+    const broken: StorageArea = {
+      get: () => Promise.reject(new Error("storage offline")),
+      set: (items) => h.browser.storage.local.set(items),
+      remove: (keys) => h.browser.storage.local.remove(keys),
+    }
+    const deps = { ...h.deps, browser: { ...h.browser, storage: { local: broken } } }
+
+    expect(await rejection(startHar({}, deps))).toBe(HAR_DISABLED_TEXT)
+    expect(h.deps.har.isRecording(TAB_ID)).toBe(false)
+  })
+
+  test("turning the opt-in off leaves a running recording to stopHar", async () => {
+    const h = harness()
+    await h.start()
+    await writeHarEnabled(h.browser, false)
+    exchange(h.browser, "r1", "hello")
+
+    const har = await h.stop()
+
+    expect(har.log.entries.map((e) => e.request.url)).toHaveLength(1)
+    expect(h.deps.har.isRecording(TAB_ID)).toBe(false)
+  })
+})
 
 describe("startHar", () => {
   test("records the session active tab with the default body cap", async () => {

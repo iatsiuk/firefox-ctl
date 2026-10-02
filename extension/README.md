@@ -166,8 +166,9 @@ result with `type: "error"`.
 `evaluate` is off until you tick "Allow the `evaluate` command" in the add-on preferences
 (about:addons > Terminal Control for Firefox > Preferences). Until
 then the command fails with `EVALUATE_DISABLED` and the tab is never messaged. The page is
-`options.html` over `src/options.ts`; the same page holds the header redaction switch. Both
-settings live in `storage.local` and are read on every command, so a toggle needs no restart.
+`options.html` over `src/options.ts`; the same page holds the HAR recording opt-in and the
+header redaction switch. All three settings live in `storage.local` and are read on every
+command, so a toggle needs no restart.
 
 Page commands need a content script, which restricted pages (`about:*`, `moz-extension:`, the
 PDF and JSON viewers) do not have: those answer `RESTRICTED_PAGE`. A tab reloading underneath
@@ -265,6 +266,9 @@ cli/firefox-ctl click --selector 'a[href="/login"]'
 cli/firefox-ctl stopHar > page.har                            # {"log": {...}}, HAR 1.2
 cli/firefox-ctl startHar --maxBodySize 0                      # metadata only, no bodies
 ```
+
+`startHar` is off until you tick "Allow HAR recording" in the add-on preferences; until then
+it fails with `HAR_DISABLED` and nothing is recorded, while `stopHar` always works.
 
 `startHar` records the target tab, its child frames included, until `stopHar`: request and
 response headers, request bodies, response bodies through `webRequest.filterResponseData`

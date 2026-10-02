@@ -1,4 +1,4 @@
-// The add-on preferences page. Reading and writing the two settings is pure -
+// The add-on preferences page. Reading and writing the settings is pure -
 // it takes a Browser and the form the page holds - so only the binding at the
 // bottom of this file touches the real globals, and only when the page is there.
 
@@ -6,15 +6,19 @@ import type { Browser } from "./browser"
 import { realBrowser } from "./browser"
 import {
   EVALUATE_ENABLED_DEFAULT,
+  HAR_ENABLED_DEFAULT,
   REDACT_HEADERS_DEFAULT,
   readEvaluateEnabled,
+  readHarEnabled,
   readRedactHeaders,
   writeEvaluateEnabled,
+  writeHarEnabled,
   writeRedactHeaders,
 } from "./settings"
 
 /** The element ids `options.html` and this bundle agree on. */
 export const EVALUATE_INPUT_ID = "evaluate-enabled"
+export const HAR_INPUT_ID = "har-enabled"
 export const REDACT_INPUT_ID = "redact-headers"
 export const STATUS_ID = "status"
 
@@ -22,11 +26,12 @@ export const SAVED_STATUS = "Saved."
 export const SAVE_FAILED_STATUS = "Could not save the setting; nothing changed."
 export const LOAD_FAILED_STATUS = "Could not read the settings; showing the defaults."
 
-export type SettingName = "evaluateEnabled" | "redactHeaders"
+export type SettingName = "evaluateEnabled" | "harEnabled" | "redactHeaders"
 
-/** What both checkboxes show. */
+/** What the checkboxes show. */
 export interface OptionsState {
   evaluateEnabled: boolean
+  harEnabled: boolean
   redactHeaders: boolean
 }
 
@@ -38,20 +43,23 @@ export interface Outcome {
 
 const DEFAULT_STATE: OptionsState = {
   evaluateEnabled: EVALUATE_ENABLED_DEFAULT,
+  harEnabled: HAR_ENABLED_DEFAULT,
   redactHeaders: REDACT_HEADERS_DEFAULT,
 }
 
 const writers: Record<SettingName, (browser: Browser, value: boolean) => Promise<void>> = {
   evaluateEnabled: writeEvaluateEnabled,
+  harEnabled: writeHarEnabled,
   redactHeaders: writeRedactHeaders,
 }
 
-/** Both settings as stored; an unreadable storage shows the safe defaults. */
+/** The settings as stored; an unreadable storage shows the safe defaults. */
 export async function loadSettings(browser: Browser): Promise<Outcome> {
   try {
     return {
       state: {
         evaluateEnabled: await readEvaluateEnabled(browser),
+        harEnabled: await readHarEnabled(browser),
         redactHeaders: await readRedactHeaders(browser),
       },
       status: "",
@@ -62,7 +70,7 @@ export async function loadSettings(browser: Browser): Promise<Outcome> {
 }
 
 /**
- * Stores one toggle and reads both settings back, so the checkboxes always show
+ * Stores one toggle and reads every setting back, so the checkboxes always show
  * what storage holds - a rejected write leaves the old value on the page. If the
  * read-back itself fails, that failure is reported as-is rather than papered
  * over with a "Saved." status the read never confirmed.
@@ -85,6 +93,7 @@ export async function saveSetting(
 /** The controls of `options.html`. */
 export interface OptionsForm {
   evaluateEnabled: HTMLInputElement
+  harEnabled: HTMLInputElement
   redactHeaders: HTMLInputElement
   status: HTMLElement
 }
@@ -97,16 +106,18 @@ function input(doc: Document, id: string): HTMLInputElement | null {
 /** The form of a loaded options page, or null in any other document. */
 export function readForm(doc: Document): OptionsForm | null {
   const evaluateEnabled = input(doc, EVALUATE_INPUT_ID)
+  const harEnabled = input(doc, HAR_INPUT_ID)
   const redactHeaders = input(doc, REDACT_INPUT_ID)
   const status = doc.getElementById(STATUS_ID)
-  if (!evaluateEnabled || !redactHeaders || !status) {
+  if (!evaluateEnabled || !harEnabled || !redactHeaders || !status) {
     return null
   }
-  return { evaluateEnabled, redactHeaders, status }
+  return { evaluateEnabled, harEnabled, redactHeaders, status }
 }
 
 function render(form: OptionsForm, outcome: Outcome): void {
   form.evaluateEnabled.checked = outcome.state.evaluateEnabled
+  form.harEnabled.checked = outcome.state.harEnabled
   form.redactHeaders.checked = outcome.state.redactHeaders
   form.status.textContent = outcome.status
 }
@@ -120,6 +131,7 @@ export async function bindForm(browser: Browser, form: OptionsForm): Promise<voi
     render(form, outcome)
   }
   toggle("evaluateEnabled", form.evaluateEnabled)
+  toggle("harEnabled", form.harEnabled)
   toggle("redactHeaders", form.redactHeaders)
   update(await loadSettings(browser))
 }

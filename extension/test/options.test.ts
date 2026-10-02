@@ -6,6 +6,7 @@ import type { Browser, StorageArea } from "../src/browser"
 import {
   bindForm,
   EVALUATE_INPUT_ID,
+  HAR_INPUT_ID,
   LOAD_FAILED_STATUS,
   loadSettings,
   REDACT_INPUT_ID,
@@ -15,7 +16,12 @@ import {
   STATUS_ID,
   saveSetting,
 } from "../src/options"
-import { readEvaluateEnabled, readRedactHeaders, writeEvaluateEnabled } from "../src/settings"
+import {
+  readEvaluateEnabled,
+  readHarEnabled,
+  readRedactHeaders,
+  writeEvaluateEnabled,
+} from "../src/settings"
 import { FakeBrowser } from "./fakes"
 
 /** A browser whose storage refuses one operation, as a full disk does. */
@@ -36,7 +42,11 @@ describe("loadSettings", () => {
   test("reports the defaults while nothing is stored", async () => {
     const outcome = await loadSettings(new FakeBrowser())
 
-    expect(outcome.state).toEqual({ evaluateEnabled: false, redactHeaders: true })
+    expect(outcome.state).toEqual({
+      evaluateEnabled: false,
+      harEnabled: false,
+      redactHeaders: true,
+    })
     expect(outcome.status).toBe("")
   })
 
@@ -44,11 +54,13 @@ describe("loadSettings", () => {
     const browser = new FakeBrowser()
     await browser.storage.local.set({
       firefoxCtlEvaluateEnabled: true,
+      firefoxCtlHarEnabled: true,
       firefoxCtlRedactHeaders: false,
     })
 
     expect((await loadSettings(browser)).state).toEqual({
       evaluateEnabled: true,
+      harEnabled: true,
       redactHeaders: false,
     })
   })
@@ -56,7 +68,11 @@ describe("loadSettings", () => {
   test("falls back to the defaults and says so when storage is unreadable", async () => {
     const outcome = await loadSettings(withStorage(new FakeBrowser(), brokenGet))
 
-    expect(outcome.state).toEqual({ evaluateEnabled: false, redactHeaders: true })
+    expect(outcome.state).toEqual({
+      evaluateEnabled: false,
+      harEnabled: false,
+      redactHeaders: true,
+    })
     expect(outcome.status).toBe(LOAD_FAILED_STATUS)
   })
 })
@@ -68,7 +84,7 @@ describe("saveSetting", () => {
     const outcome = await saveSetting(browser, "evaluateEnabled", true)
 
     expect(outcome).toEqual({
-      state: { evaluateEnabled: true, redactHeaders: true },
+      state: { evaluateEnabled: true, harEnabled: false, redactHeaders: true },
       status: SAVED_STATUS,
     })
     expect(await readEvaluateEnabled(browser)).toBe(true)
@@ -79,8 +95,24 @@ describe("saveSetting", () => {
 
     const outcome = await saveSetting(browser, "redactHeaders", false)
 
-    expect(outcome.state).toEqual({ evaluateEnabled: false, redactHeaders: false })
+    expect(outcome.state).toEqual({
+      evaluateEnabled: false,
+      harEnabled: false,
+      redactHeaders: false,
+    })
     expect(await readRedactHeaders(browser)).toBe(false)
+  })
+
+  test("stores the HAR opt-in", async () => {
+    const browser = new FakeBrowser()
+
+    const outcome = await saveSetting(browser, "harEnabled", true)
+
+    expect(outcome).toEqual({
+      state: { evaluateEnabled: false, harEnabled: true, redactHeaders: true },
+      status: SAVED_STATUS,
+    })
+    expect(await readHarEnabled(browser)).toBe(true)
   })
 
   test("reports the stored state again when the write fails", async () => {
@@ -100,7 +132,11 @@ describe("saveSetting", () => {
     const outcome = await saveSetting(withStorage(browser, brokenGet), "evaluateEnabled", true)
 
     expect(outcome.status).toBe(LOAD_FAILED_STATUS)
-    expect(outcome.state).toEqual({ evaluateEnabled: false, redactHeaders: true })
+    expect(outcome.state).toEqual({
+      evaluateEnabled: false,
+      harEnabled: false,
+      redactHeaders: true,
+    })
     expect(await readEvaluateEnabled(browser)).toBe(true)
   })
 
@@ -114,7 +150,11 @@ describe("saveSetting", () => {
     )
 
     expect(outcome.status).toBe(LOAD_FAILED_STATUS)
-    expect(outcome.state).toEqual({ evaluateEnabled: false, redactHeaders: true })
+    expect(outcome.state).toEqual({
+      evaluateEnabled: false,
+      harEnabled: false,
+      redactHeaders: true,
+    })
   })
 })
 
@@ -125,11 +165,12 @@ describe("options page", () => {
     document.body.innerHTML = page.replace(/^[\s\S]*<body>/, "").replace(/<\/body>[\s\S]*$/, "")
   })
 
-  test("the page carries both inputs and a status line", () => {
+  test("the page carries the three inputs and a status line", () => {
     const form = readForm(document)
 
     expect(form).not.toBeNull()
     expect(form?.evaluateEnabled.type).toBe("checkbox")
+    expect(form?.harEnabled.type).toBe("checkbox")
     expect(form?.redactHeaders.type).toBe("checkbox")
   })
 
@@ -145,16 +186,20 @@ describe("options page", () => {
     expect(readForm(document)).toBeNull()
   })
 
-  test("reports a document missing just one checkbox", () => {
-    document.getElementById(EVALUATE_INPUT_ID)?.remove()
+  test.each([EVALUATE_INPUT_ID, HAR_INPUT_ID, REDACT_INPUT_ID])(
+    "reports a document missing just the %p checkbox",
+    (id) => {
+      document.getElementById(id)?.remove()
 
-    expect(readForm(document)).toBeNull()
-  })
+      expect(readForm(document)).toBeNull()
+    },
+  )
 
   test("shows the stored values on load", async () => {
     const browser = new FakeBrowser()
     await browser.storage.local.set({
       firefoxCtlEvaluateEnabled: true,
+      firefoxCtlHarEnabled: true,
       firefoxCtlRedactHeaders: false,
     })
     const form = readForm(document)
@@ -165,6 +210,7 @@ describe("options page", () => {
     await bindForm(browser, form)
 
     expect(form.evaluateEnabled.checked).toBe(true)
+    expect(form.harEnabled.checked).toBe(true)
     expect(form.redactHeaders.checked).toBe(false)
     expect(form.status.textContent).toBe("")
   })
@@ -178,6 +224,7 @@ describe("options page", () => {
     await bindForm(new FakeBrowser(), form)
 
     expect(form.evaluateEnabled.checked).toBe(false)
+    expect(form.harEnabled.checked).toBe(false)
     expect(form.redactHeaders.checked).toBe(true)
   })
 
@@ -193,6 +240,10 @@ describe("options page", () => {
     await form.evaluateEnabled.onchange?.(new Event("change"))
     expect(await readEvaluateEnabled(browser)).toBe(true)
     expect(form.status.textContent).toBe(SAVED_STATUS)
+
+    form.harEnabled.checked = true
+    await form.harEnabled.onchange?.(new Event("change"))
+    expect(await readHarEnabled(browser)).toBe(true)
 
     form.redactHeaders.checked = false
     await form.redactHeaders.onchange?.(new Event("change"))
@@ -227,8 +278,13 @@ describe("options.html", () => {
     expect(page).toContain("arbitrary JavaScript")
   })
 
+  test("says the HAR recording is off until ticked and names its error", () => {
+    expect(page).toContain("startHar")
+    expect(page).toContain("HAR_DISABLED")
+  })
+
   test("names the ids the bundle binds to", () => {
-    for (const id of [EVALUATE_INPUT_ID, REDACT_INPUT_ID, STATUS_ID]) {
+    for (const id of [EVALUATE_INPUT_ID, HAR_INPUT_ID, REDACT_INPUT_ID, STATUS_ID]) {
       expect(page).toContain(`id="${id}"`)
     }
   })

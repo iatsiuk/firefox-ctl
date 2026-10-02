@@ -13,6 +13,7 @@ import type { HostCommand, JsonObject } from "../src/protocol"
 import { commandContext } from "../src/protocol"
 import { waitForPageReady } from "../src/readiness"
 import { Session, type SessionState, WINDOW_STATE_KEY } from "../src/session"
+import { writeHarEnabled } from "../src/settings"
 import { FakeBrowser, FakeEnvironment, type FakePort } from "./fakes"
 
 function frame(id: string, command: string, params: JsonObject = {}): HostCommand {
@@ -336,6 +337,7 @@ describe("a stopHar past its deadline", () => {
     const env = new FakeEnvironment({ now: 1000 })
     const dispatcher = createDispatcher(browser, env)
     dispatcher.deps.har.attach(browser)
+    await writeHarEnabled(browser, true)
     expect(await dispatcher.handle(frame("s", "startHar", { tabId: 10 }))).toMatchObject({
       success: true,
     })

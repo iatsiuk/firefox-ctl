@@ -27,7 +27,7 @@ page (`options.html`), which carries the two switches described under "User-faci
 | `tabGroups` | the managed tabs are put in a tab group named `firefox-ctl` so the user can see at a glance which tabs the terminal owns; only `tabGroups.query` and `tabGroups.update` are called |
 | `<all_urls>` | the user names the page to drive, so no narrower host list is possible; it backs the content script, `tabs.captureTab` and the network log |
 | `webRequest` | `getNetworkRequests` reports request and response metadata, and the screenshot readiness check waits for a tab's pending requests to settle; those listeners are read-only and never read a body. `startHar` records one tab the user names as a HAR file: for that tab only (`RequestFilter.tabId`) and only until `stopHar`, it reads request and response headers, the request body and the TLS summary (`getSecurityInfo`). Nothing is cancelled, redirected or modified |
-| `webRequestBlocking` | needed for `webRequest.filterResponseData` in MV2, the only way to read a response body for the HAR. Stream filters are opened only on a tab the user asked to record with `startHar`; every chunk is written through to the page unchanged before it is stored, the filter disconnects once the per-body cap is reached, and `stopHar` releases every filter of the recording. The blocking `onHeadersReceived` listener exists only to await `getSecurityInfo` and returns nothing. While no tab records, no blocking listener is registered |
+| `webRequestBlocking` | needed for `webRequest.filterResponseData` in MV2, the only way to read a response body for the HAR. Stream filters are opened only on a tab the user asked to record with `startHar`, which is refused with `HAR_DISABLED` until the user ticks "Allow HAR recording" in the add-on preferences; every chunk is written through to the page unchanged before it is stored, the filter disconnects once the per-body cap is reached, and `stopHar` releases every filter of the recording. The blocking `onHeadersReceived` listener exists only to await `getSecurityInfo` and returns nothing. While no tab records, no blocking listener is registered |
 | `webNavigation` | `watchFrames` listens for `onDOMContentLoaded` to inject the content script into a matching child frame of a watched tab. Only the frame id, parent frame id and document url of that one tab are read, never a request body. A HAR recording also uses the top frame's `onBeforeNavigate`, `onCommitted`, `onDOMContentLoaded` and `onCompleted` of the recorded tab for the HAR pages and their load timings |
 | `cookies` | `exportCookies`, `setCookie`, `deleteCookies` and `importCookies` read and write one cookie store, by default the one of the tab the terminal drives, so a login can be moved into the managed window or cleared without the browser UI. Only `cookies.getAll` and `cookies.set` are called, and only when the user runs one of these commands; nothing is read in the background |
 | `storage` | two `storage.local` keys hold the managed window id and the attached tab ids so a background restart re-adopts the same window instead of opening a second one, plus the two preference flags. No page data is stored |
@@ -62,14 +62,20 @@ attached private tab are kept in memory only and do not survive a background res
 
 ## User-facing settings
 
-Both switches live on the preferences page (about:addons > Terminal Control for Firefox > Preferences), are stored
+The three switches live on the preferences page (about:addons > Terminal Control for Firefox > Preferences), are stored
 in `storage.local` and are read on every command, so a toggle takes effect without a restart.
-No command line flag can change either of them.
+No command line flag can change any of them.
 
 - "Allow the `evaluate` command" - off by default. While it is off, `evaluate` fails with
   `EVALUATE_DISABLED: evaluate is disabled; enable it in the add-on preferences (about:addons
   > Terminal Control for Firefox > Preferences)` and no message is sent to the tab, so no string from the host is
   ever compiled. An unreadable `storage.local` keeps the gate shut
+- "Allow HAR recording" - off by default. While it is off, `startHar` fails with
+  `HAR_DISABLED: HAR recording is disabled; enable it in the add-on preferences (about:addons
+  > Terminal Control for Firefox > Preferences)` before any `webRequest` listener or stream
+  filter is attached, so nothing is recorded. An unreadable `storage.local` keeps the gate
+  shut. `stopHar` stays available, so a recording started before the box was unticked can
+  still be ended and its memory released
 - "Hide credentials in headers and cookies" - on by default. With it on, `getNetworkRequests
   --includeHeaders` keeps the header names but replaces the values of `set-cookie`, `cookie`,
   `authorization`, `proxy-authorization`, `www-authenticate` and `proxy-authenticate` with
@@ -106,7 +112,8 @@ The add-on answers nothing until the native host is installed, so this part need
    ```
 
    `firefox-ctl evaluate --expression "document.title"` fails with `EVALUATE_DISABLED` until the
-   preferences checkbox is ticked, and succeeds after it.
+   preferences checkbox is ticked, and succeeds after it. `firefox-ctl startHar` likewise fails
+   with `HAR_DISABLED` until "Allow HAR recording" is ticked.
 
 ## Source archive
 

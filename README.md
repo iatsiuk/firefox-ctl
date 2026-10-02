@@ -68,7 +68,7 @@ Use `firefox-ctl --help` or `firefox-ctl <command> --help` for flags. `--json '{
 - Page analysis: `getPageState`, `getAccessibilitySnapshot`, `getElementInfo`, `evaluate` (opt-in, see Limitations)
 - Capture and diagnostics: `screenshot`, `handleConsent`, `getConsoleLogs`, `getNetworkRequests`
 - Cookies: `exportCookies`, `setCookie`, `deleteCookies`, `importCookies` (the store of the target tab by default, `--storeId` to pick one)
-- HAR recording: `startHar`, `stopHar` (one tab with its child frames, headers and bodies included; `firefox-ctl stopHar > page.har` writes a HAR 1.2 file)
+- HAR recording (opt-in, see Limitations): `startHar`, `stopHar` (one tab with its child frames, headers and bodies included; `firefox-ctl stopHar > page.har` writes a HAR 1.2 file)
 
 The complete parameters, result shapes, and error texts are in [docs/commands.md](docs/commands.md).
 
@@ -89,6 +89,7 @@ A screenshot reply keeps a 9 MiB budget of its own. firefox-ctl re-encodes a lar
 
 - This is a single-user tool. There is no auth token, command allowlist, or URL allowlist. The Unix-socket directory is mode 0700 and the socket is mode 0600.
 - `evaluate` is off by default. It runs only after you tick "Allow the `evaluate` command" in the add-on preferences (about:addons > Terminal Control for Firefox > Preferences); until then it fails with `EVALUATE_DISABLED` and no page is touched. Nothing on the command line can turn it on.
+- `startHar` is off by default too. It runs only after you tick "Allow HAR recording" in the add-on preferences; until then it fails with `HAR_DISABLED` and nothing is recorded. `stopHar` always works, so a recording started before you untick it can still be ended.
 - `createWindow` requests a private window by default. If the add-on lacks Firefox's private-window permission, it falls back to a normal window and returns `privateFallback: true` and `modeWarning`.
 - Content scripts cannot run on restricted browser or extension pages such as `about:` and `moz-extension:`. Those return `RESTRICTED_PAGE`. JSON, PDF, download, and other non-HTML pages return `CONTENT_SCRIPT_ERROR` when detected.
 - Page commands act on the tab's top document by default (`all_frames: false`). Child frames are opt-in per tab: `watchFrames --tabId <id>` observes the frames that tab loads from then on, `listFrames` names them, and `--frameId <id>` runs `getContent`, `click`, `type`, `handleConsent` and the other document-local commands inside one of them. A frame that loaded before the watch is not observed and answers `FRAME_NOT_OBSERVED`; `screenshot` stays tab-wide. See [docs/commands.md](docs/commands.md).

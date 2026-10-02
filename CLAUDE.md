@@ -10,7 +10,7 @@ Transport: `docs/architecture.md`. Command set and error prefixes: `docs/command
 ## Goals
 
 - The full command set of `docs/commands.md`: every command works with the documented name, parameters and result shape. Not an MVP, not a subset
-- Dropped on purpose: MCP, the popup, MCP-bound multi-agent coordination, focus loops, watermark, and every security gate except the `evaluate` opt-in, which the user ticks in the add-on preferences. Full list in `docs/commands.md`
+- Dropped on purpose: MCP, the popup, MCP-bound multi-agent coordination, focus loops, watermark, and every security gate except two opt-ins the user ticks in the add-on preferences: `evaluate` and HAR recording. Full list in `docs/commands.md`
 - One statically built Go binary, no runtime dependencies (Go libraries such as cobra are fine)
 - Protocol types in `cli/internal/protocol` and `extension/src/protocol.ts` are the contract and change together
 - JSON on stdout; on failure the extension's error message on stderr and non-zero exit. Error text carries stable prefix codes (`TAB_CLOSED: ...`, `RESTRICTED_PAGE: ...`); no separate `code` or `details` field
@@ -47,7 +47,7 @@ Style and tooling follow orx-cli. `cli/.golangci.yml` is its config with local p
 
 ### Trust model
 
-No auth token, no command or URL whitelists. The socket in a user-owned directory with mode 0600 is the only protection for every command but one: `evaluate` runs arbitrary expressions, so it stays off until the user ticks it in the add-on preferences (`options.html`), and no CLI flag can turn it on.
+No auth token, no command or URL whitelists. The socket in a user-owned directory with mode 0600 is the only protection for every command but two, which stay off until the user ticks them in the add-on preferences (`options.html`), and no CLI flag can turn them on: `evaluate` runs arbitrary expressions, and `startHar` records every header, cookie and body a tab exchanges. `stopHar` is not gated, so a recording started before the opt-in was withdrawn can still be ended.
 
 A child frame watched with `watchFrames` runs the same content script in that frame's own origin, so its commands read and write that document, still without any whitelist.
 

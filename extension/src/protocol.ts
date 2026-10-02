@@ -135,6 +135,7 @@ export const ERROR_CODES = [
   "HAR_TOO_LARGE",
   "HAR_ALREADY_RECORDING",
   "HAR_NOT_RECORDING",
+  "HAR_DISABLED",
 ] as const
 
 export type ErrorCode = (typeof ERROR_CODES)[number]

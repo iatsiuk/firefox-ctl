@@ -6,7 +6,8 @@ import type { Har, HarRecording } from "../har"
 import { buildLog, fitLog, redactEntry } from "../har"
 import { BODY_BUDGET, MAX_BODY_DEFAULT } from "../har-recorder"
 import type { JsonObject, JsonValue } from "../protocol"
-import { redactHeadersOrDefault } from "../settings"
+import { ExtensionError } from "../protocol"
+import { HAR_ENABLED_DEFAULT, readHarEnabled, redactHeadersOrDefault } from "../settings"
 import type { TabsDeps } from "./tabs"
 import { idOf, parseTabId, resolveTargetTab } from "./tabs"
 
@@ -28,8 +29,27 @@ function maxBodySize(value: JsonValue | undefined): number {
   return value
 }
 
-/** Starts recording the target tab: every request, headers and bodies. */
+const HAR_DISABLED_HINT =
+  "HAR recording is disabled; enable it in the add-on preferences (about:addons > Terminal Control for Firefox > Preferences)"
+
+/** Reads the opt-in on every call; an unreadable storage keeps recording off. */
+async function harOptIn(deps: HandlerDeps): Promise<boolean> {
+  try {
+    return await readHarEnabled(deps.browser)
+  } catch {
+    return HAR_ENABLED_DEFAULT
+  }
+}
+
+/**
+ * Starts recording the target tab: every request, headers and bodies. Off
+ * until the user ticks it in the add-on preferences; stopHar is never gated,
+ * so a recording started before the opt-in was withdrawn can still be ended.
+ */
 export const startHar: Handler = async (params, deps) => {
+  if (!(await harOptIn(deps))) {
+    throw new ExtensionError("HAR_DISABLED", HAR_DISABLED_HINT)
+  }
   const cap = maxBodySize(params.maxBodySize)
   const tab = await resolveTargetTab(deps, params)
   const tabId = idOf(tab)

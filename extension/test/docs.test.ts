@@ -813,6 +813,29 @@ describe("HAR documentation", () => {
     },
   )
 
+  test.skipIf(root === undefined)(
+    "the docs state that startHar is off until the preferences opt-in",
+    async () => {
+      const commands = await readRootDoc(join("docs", "commands.md"))
+      for (const phrase of ["HAR_DISABLED", '"Allow HAR recording"', "Only `startHar` is gated"]) {
+        expect(commands).toContain(phrase)
+      }
+      const architecture = await readRootDoc(join("docs", "architecture.md"))
+      expect(architecture).toContain("HAR_DISABLED")
+      expect(architecture).toContain("three checkboxes")
+      const reviewer = await readRootDoc(join("docs", "reviewer-notes.md"))
+      expect(reviewer).toContain('"Allow HAR recording" - off by default')
+      const readme = await readRootDoc("README.md")
+      expect(readme).toContain("HAR_DISABLED")
+    },
+  )
+
+  test("extension README states how to enable HAR recording", async () => {
+    const text = await Bun.file(join(import.meta.dir, "..", "README.md")).text()
+    expect(text).toContain('"Allow HAR recording"')
+    expect(text).toContain("HAR_DISABLED")
+  })
+
   test("extension README walks through a HAR recording", async () => {
     const text = await Bun.file(join(import.meta.dir, "..", "README.md")).text()
     for (const step of ["firefox-ctl startHar", "firefox-ctl stopHar > page.har"]) {

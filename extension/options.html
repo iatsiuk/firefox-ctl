@@ -43,6 +43,21 @@
 
     <div class="setting">
       <label>
+        <input type="checkbox" id="har-enabled" />
+        Allow HAR recording
+      </label>
+      <p class="warning">
+        While this is on, the terminal can record every request a tab makes, with its headers,
+        cookies and request and response bodies. Leave it off unless you need a HAR.
+      </p>
+      <p>
+        With it off, <code>firefox-ctl startHar</code> fails with <code>HAR_DISABLED</code> and
+        nothing is recorded. <code>stopHar</code> still ends a recording started before.
+      </p>
+    </div>
+
+    <div class="setting">
+      <label>
         <input type="checkbox" id="redact-headers" />
         Hide credentials in headers and cookies
       </label>

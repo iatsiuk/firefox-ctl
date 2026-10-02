@@ -18,7 +18,7 @@ import type { Har, HarEntry } from "../src/har"
 import { startPage } from "../src/page"
 import type { ExtensionResponse, HostCommand, JsonObject } from "../src/protocol"
 import { ERROR_CODES } from "../src/protocol"
-import { writeEvaluateEnabled } from "../src/settings"
+import { writeEvaluateEnabled, writeHarEnabled } from "../src/settings"
 import { childWindow, fakePage, stubRect, stubTop } from "./dom"
 import { FakeBrowser, FakeEnvironment, type FakePort, type FakeStreamFilter } from "./fakes"
 import errors from "./fixtures/errors.json"
@@ -806,6 +806,7 @@ describe("the whole command table", () => {
     const { port } = session(browser)
     contentTab(browser)
     await writeEvaluateEnabled(browser, true)
+    await writeHarEnabled(browser, true)
     const seen = new Set<string>(["createWindow"])
     const created = result(
       await run(port, "createWindow", { url: "https://example.com", private: false }),
@@ -1196,6 +1197,8 @@ interface HarSide {
 function harSession(): HarSide {
   let clock = 1000
   const browser = new FakeBrowser({ now: () => clock })
+  // the fake storage writes synchronously, so the opt-in is in place on return
+  void writeHarEnabled(browser, true)
   browser.addWindow({ id: 1, focused: true, type: "normal", incognito: false })
   browser.addTab({ id: HAR_TAB, windowId: 1, url: "https://user.example/", active: true })
   browser.addTab({ id: HAR_OTHER_TAB, windowId: 1, url: "https://other.example/" })
@@ -1277,6 +1280,20 @@ function harEntry(har: Har, url: string, method = "GET"): HarEntry {
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff])
 
 describe("a HAR recording through the port", () => {
+  test("startHar is refused end to end until the preferences opt-in is stored", async () => {
+    const side = harSession()
+    await writeHarEnabled(side.browser, false)
+
+    expect(await failure(side.port, "startHar", { tabId: HAR_TAB })).toBe(
+      "HAR_DISABLED: HAR recording is disabled; enable it in the add-on preferences " +
+        "(about:addons > Terminal Control for Firefox > Preferences)",
+    )
+    expect(side.handle.dispatcher.deps.har.isRecording(HAR_TAB)).toBe(false)
+
+    await writeHarEnabled(side.browser, true)
+    expect((await run(side.port, "startHar", { tabId: HAR_TAB })).success).toBe(true)
+  })
+
   test("startHar, traffic on the tab, stopHar answers a HAR 1.2 log", async () => {
     const side = harSession()
     const { browser, port } = side

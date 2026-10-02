@@ -3,11 +3,14 @@ import { describe, expect, test } from "bun:test"
 import type { Browser, StorageArea } from "../src/browser"
 import {
   EVALUATE_ENABLED_KEY,
+  HAR_ENABLED_KEY,
   REDACT_HEADERS_KEY,
   readEvaluateEnabled,
+  readHarEnabled,
   readRedactHeaders,
   redactHeadersOrDefault,
   writeEvaluateEnabled,
+  writeHarEnabled,
   writeRedactHeaders,
 } from "../src/settings"
 import { FakeBrowser } from "./fakes"
@@ -24,9 +27,10 @@ function brokenStorage(): Browser {
 }
 
 describe("settings defaults", () => {
-  test("an empty storage disables evaluate and redacts headers", async () => {
+  test("an empty storage disables evaluate and HAR recording and redacts headers", async () => {
     const browser = new FakeBrowser()
     expect(await readEvaluateEnabled(browser)).toBe(false)
+    expect(await readHarEnabled(browser)).toBe(false)
     expect(await readRedactHeaders(browser)).toBe(true)
   })
 
@@ -43,9 +47,11 @@ describe("settings defaults", () => {
     const browser = new FakeBrowser()
     await browser.storage.local.set({
       [EVALUATE_ENABLED_KEY]: stored,
+      [HAR_ENABLED_KEY]: stored,
       [REDACT_HEADERS_KEY]: stored,
     })
     expect(await readEvaluateEnabled(browser)).toBe(evaluate)
+    expect(await readHarEnabled(browser)).toBe(false)
     expect(await readRedactHeaders(browser)).toBe(redact)
   })
 
@@ -57,6 +63,15 @@ describe("settings defaults", () => {
     expect(await readEvaluateEnabled(browser)).toBe(false)
   })
 
+  test("only a stored true enables HAR recording", async () => {
+    const browser = new FakeBrowser()
+    await writeHarEnabled(browser, true)
+    expect(await readHarEnabled(browser)).toBe(true)
+    await writeHarEnabled(browser, false)
+    expect(await readHarEnabled(browser)).toBe(false)
+    expect(await browser.storage.local.get(HAR_ENABLED_KEY)).toEqual({ [HAR_ENABLED_KEY]: false })
+  })
+
   test("only a stored false disables redaction", async () => {
     const browser = new FakeBrowser()
     await browser.storage.local.set({ [REDACT_HEADERS_KEY]: false })
@@ -65,11 +80,15 @@ describe("settings defaults", () => {
     expect(await readRedactHeaders(browser)).toBe(true)
   })
 
-  test("the two settings are independent", async () => {
+  test("the three settings are independent", async () => {
     const browser = new FakeBrowser()
     await browser.storage.local.set({ [EVALUATE_ENABLED_KEY]: true, [REDACT_HEADERS_KEY]: false })
     expect(await readEvaluateEnabled(browser)).toBe(true)
+    expect(await readHarEnabled(browser)).toBe(false)
     expect(await readRedactHeaders(browser)).toBe(false)
+    await browser.storage.local.set({ [EVALUATE_ENABLED_KEY]: false, [HAR_ENABLED_KEY]: true })
+    expect(await readEvaluateEnabled(browser)).toBe(false)
+    expect(await readHarEnabled(browser)).toBe(true)
   })
 })
 
@@ -77,6 +96,7 @@ describe("settings failures", () => {
   test("a rejected read propagates so callers fail closed", async () => {
     const browser = brokenStorage()
     expect(readEvaluateEnabled(browser)).rejects.toThrow("storage offline")
+    expect(readHarEnabled(browser)).rejects.toThrow("storage offline")
     expect(readRedactHeaders(browser)).rejects.toThrow("storage offline")
   })
 

@@ -229,6 +229,7 @@ describe("ExtensionError", () => {
       "HAR_TOO_LARGE",
       "HAR_ALREADY_RECORDING",
       "HAR_NOT_RECORDING",
+      "HAR_DISABLED",
     ])
     for (const code of ERROR_CODES) {
       expect(new ExtensionError(code, "text").message).toBe(`${code}: text`)

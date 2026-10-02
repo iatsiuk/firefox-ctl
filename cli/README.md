@@ -73,7 +73,8 @@ firefox-ctl evaluate --expression "document.title"   # only after the opt-in, se
 `evaluate` is the one command the extension refuses by default: it answers
 `EVALUATE_DISABLED: evaluate is disabled; enable it in the add-on preferences (about:addons >
 Terminal Control for Firefox > Preferences)` until "Allow the `evaluate` command" is ticked there. The switch lives in
-the browser on purpose, so no flag here can lift it.
+the browser on purpose, so no flag here can lift it. `startHar` is refused the same way, with
+`HAR_DISABLED`, until "Allow HAR recording" is ticked; `stopHar` is never refused.
 
 Flags are the protocol parameter names verbatim, in camelCase (`--tabId`, `--maxLength`), so the CLI and the extension speak the same vocabulary. Only flags you actually set are sent, which leaves extension defaults in place; `--flag=false` is an explicit value and is sent.
 

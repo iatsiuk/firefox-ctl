@@ -96,4 +96,4 @@ Verification: Go tests for the discarded frame, the unescaped and chunked replie
 
 ## After the plans
 
-The command set of `docs/commands.md` is complete: all 39 commands are registered and reachable end to end. What was dropped on purpose - MCP, the popup, multi-agent coordination, focus loops, the watermark, and every security gate except the `evaluate` opt-in - is listed under Dropped there and is not planned. The AMO listing plan added the preferences page, the data-collection declaration, the private-state rule, the Linux install path and the release pipeline.
+The command set of `docs/commands.md` is complete: all 39 commands are registered and reachable end to end. What was dropped on purpose - MCP, the popup, multi-agent coordination, focus loops, the watermark, and every security gate except the `evaluate` and HAR recording opt-ins - is listed under Dropped there and is not planned. The AMO listing plan added the preferences page, the data-collection declaration, the private-state rule, the Linux install path and the release pipeline.
