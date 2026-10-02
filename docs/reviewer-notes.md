@@ -26,8 +26,9 @@ page (`options.html`), which carries the two switches described under "User-faci
 | `tabs` | commands create, list, navigate, close and read tabs and windows (`createWindow`, `getTabs`, `navigate`, `closeTab`, `attachTab`, `getActiveTab`), and `tabs.captureTab` renders the screenshot |
 | `tabGroups` | the managed tabs are put in a tab group named `firefox-ctl` so the user can see at a glance which tabs the terminal owns; only `tabGroups.query` and `tabGroups.update` are called |
 | `<all_urls>` | the user names the page to drive, so no narrower host list is possible; it backs the content script, `tabs.captureTab` and the network log |
-| `webRequest` | `getNetworkRequests` reports request and response metadata, and the screenshot readiness check waits for a tab's pending requests to settle. Listeners are read-only: there is no `webRequestBlocking`, nothing is redirected and no request body is read |
-| `webNavigation` | `watchFrames` listens for `onDOMContentLoaded` to inject the content script into a matching child frame of a watched tab. Only the frame id, parent frame id and document url of that one tab are read, never a request body |
+| `webRequest` | `getNetworkRequests` reports request and response metadata, and the screenshot readiness check waits for a tab's pending requests to settle; those listeners are read-only and never read a body. `startHar` records one tab the user names as a HAR file: for that tab only (`RequestFilter.tabId`) and only until `stopHar`, it reads request and response headers, the request body and the TLS summary (`getSecurityInfo`). Nothing is cancelled, redirected or modified |
+| `webRequestBlocking` | needed for `webRequest.filterResponseData` in MV2, the only way to read a response body for the HAR. Stream filters are opened only on a tab the user asked to record with `startHar`; every chunk is written through to the page unchanged before it is stored, the filter disconnects once the per-body cap is reached, and `stopHar` releases every filter of the recording. The blocking `onHeadersReceived` listener exists only to await `getSecurityInfo` and returns nothing. While no tab records, no blocking listener is registered |
+| `webNavigation` | `watchFrames` listens for `onDOMContentLoaded` to inject the content script into a matching child frame of a watched tab. Only the frame id, parent frame id and document url of that one tab are read, never a request body. A HAR recording also uses the top frame's `onBeforeNavigate`, `onCommitted`, `onDOMContentLoaded` and `onCompleted` of the recorded tab for the HAR pages and their load timings |
 | `cookies` | `exportCookies`, `setCookie`, `deleteCookies` and `importCookies` read and write one cookie store, by default the one of the tab the terminal drives, so a login can be moved into the managed window or cleared without the browser UI. Only `cookies.getAll` and `cookies.set` are called, and only when the user runs one of these commands; nothing is read in the background |
 | `storage` | two `storage.local` keys hold the managed window id and the attached tab ids so a background restart re-adopts the same window instead of opening a second one, plus the two preference flags. No page data is stored |
 
@@ -45,6 +46,7 @@ be wrong even though nothing goes over the network.
 | `getContent`, `getAccessibilitySnapshot`, `getElementInfo`, `getPageState`, `waitFor` | text, HTML, link and form structure of the page | `websiteContent` |
 | `screenshot` | a rendered image of the page | `websiteContent` |
 | `getConsoleLogs`, `getNetworkRequests` | console output, request and response metadata, urls with credential-looking query values stripped, response headers redacted by default | `websiteContent` |
+| `startHar`, `stopHar` | every request of the one recorded tab: urls, request and response headers, request and response bodies, cookies, server IPs, timings and the TLS summary; credential header and cookie values redacted by default. The page's own `User-Agent` request header is part of that recorded traffic, not telemetry | `websiteContent`, `websiteActivity`, `authenticationInfo` |
 | `click`, `type`, `pressKey`, `scroll`, `handleConsent` | what was clicked, typed, pressed or scrolled and the resulting element state | `websiteActivity` |
 | `type` into a password field, `getContent` or `evaluate` over one | the value of a credential field | `authenticationInfo` |
 | `exportCookies`, and `setCookie`, `deleteCookies`, `importCookies` echoing what they wrote or removed | cookie names, values, domains and attributes of one cookie store, session cookies included | `authenticationInfo` |
@@ -71,7 +73,8 @@ No command line flag can change either of them.
 - "Redact credential response headers" - on by default. With it on, `getNetworkRequests
   --includeHeaders` keeps the header names but replaces the values of `set-cookie`, `cookie`,
   `authorization`, `proxy-authorization`, `www-authenticate` and `proxy-authenticate` with
-  `[redacted]`. Unticking it returns them raw
+  `[redacted]`, and the HAR from `stopHar` does the same in request and response headers and
+  for every cookie value. Unticking it returns them raw
 
 ## Trying it out
 

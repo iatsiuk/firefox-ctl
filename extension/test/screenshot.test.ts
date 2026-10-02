@@ -1,6 +1,6 @@
 // The screenshot command: presets, the readiness gate, the capture that never
 // activates a tab, the annotations around it and the downgrade ladder that
-// keeps the reply inside the host's frame limit. No real image is decoded here
+// keeps the reply inside its 9 MiB budget. No real image is decoded here
 // - the content script's `resizeImage` is scripted through the fake browser.
 
 import { describe, expect, test } from "bun:test"
@@ -763,7 +763,7 @@ describe("screenshot", () => {
     expect(h.actions().filter((action) => action === "removeAnnotations")).toHaveLength(0)
   })
 
-  test("leaves a reply just under the frame limit untouched", async () => {
+  test("leaves a reply just under the budget untouched", async () => {
     const h = harness({ resize: () => ({ dataUrl: fill(FRAME_LIMIT_BYTES - 4096) }) })
 
     const result = await h.run()

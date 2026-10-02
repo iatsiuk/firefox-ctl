@@ -228,15 +228,16 @@ script) and the capture proceeds. The result reports it as
 
 ### The frame limit
 
-The host drops any extension frame over 10 MiB, so the handler measures the serialised reply
-and keeps it under 9 MiB. Over that it re-encodes the image it already has - never a second
-capture, so a long page costs one render however far this goes - down a ladder: a PNG becomes
-a JPEG at quality 80 first, then quality falls in steps of 10 to a floor of 20, then scale is
-multiplied by 0.75 per step to a floor of 0.25, at most 8 steps. `format`, `quality` and
+The host accepts extension frames up to 256 MiB, but a screenshot keeps a 9 MiB budget of its own:
+the handler measures the serialised reply and keeps it under 9 MiB. Over that it re-encodes the
+image it already has - never a second capture, so a long page costs one render however far
+this goes - down a ladder: a PNG becomes a JPEG at quality 80 first, then quality falls in
+steps of 10 to a floor of 20, then scale is multiplied by 0.75 per step to a floor of 0.25, at
+most 8 steps. `format`, `quality` and
 `scale` in the result are the values actually applied, and `reduced {from, to, steps}` records
 the downgrade. When both floors are reached and the reply still does not fit, the command
-fails with `SCREENSHOT_TOO_LARGE: <bytes> exceeds the 10 MiB frame limit; lower --scale or
---quality.` rather than letting the host drop the frame and the client time out.
+fails with `SCREENSHOT_TOO_LARGE: <bytes> exceeds the 9 MiB screenshot budget; lower --scale or
+--quality.`
 
 ## Consent
 
@@ -425,6 +426,9 @@ of the last 2000 ms. A `--clear` therefore leaves every tab looking idle until n
 arrive, and a `screenshot` issued right after one can capture a page that is still loading;
 `--maxWait` cannot help there, because there is nothing left to wait for.
 
+The tracker is a log, not a capture: for request and response headers, bodies, redirects and
+timings of one tab in a file a HAR viewer loads, see HAR.
+
 All page commands additionally accept `tabId` and `windowId`, and the twelve document-local
 ones also accept `frameId`; see Child frames.
 
@@ -509,6 +513,110 @@ and keeps serving, so split the file and import it in parts.
 |---|---|---|
 | startHar | [maxBodySize=10485760], [tabId], [windowId] | `{tabId, startedDateTime, maxBodySize}`; starts a HAR 1.2 recording of the target tab, its child frames included: request and response headers, request bodies, response bodies through stream filters, redirects, errors, timings and pages; `maxBodySize` is the bytes kept per body, 0 records metadata only, at most 167772160 (`maxBodySize must be an integer between 0 and 167772160`); a tab already recording answers `HAR_ALREADY_RECORDING: tab <id> is already recording; call stopHar first` |
 | stopHar | [tabId], [windowId] | the HAR `{log}` of the recording, so `firefox-ctl stopHar > page.har` is a valid HAR file; releases the recording's stream filters and its memory; an explicit `tabId` answers even after its tab closed; a tab without a recording answers `HAR_NOT_RECORDING: no HAR recording on tab <id>`; credential headers and cookie values are `[redacted]` while header redaction is ticked in the add-on preferences; a reply that would not fit loses its largest bodies first and fails with `HAR_TOO_LARGE` only when it is too large without any |
+
+A recording is a start/stop pair around whatever the agent does in the tab:
+
+```
+firefox-ctl startHar
+firefox-ctl navigate --url https://example.com/login
+firefox-ctl type --selector '#user' --text alice
+firefox-ctl click --selector 'button[type=submit]'
+firefox-ctl stopHar > page.har
+```
+
+The result of `stopHar` is the HAR itself, `{"log": {...}}`, printed as indented JSON without
+HTML escaping, so the redirect writes a file Firefox DevTools (Network > Import HAR) and other
+HAR 1.2 viewers load. There is no snapshot of a running recording and no status command:
+`startHar` on a tab that records answers `HAR_ALREADY_RECORDING`, `stopHar` on one that does not
+answers `HAR_NOT_RECORDING`. Recordings of different tabs are independent and may run at once.
+
+### What is captured
+
+Every request the tab makes, its child frames included, while it records; a request already in
+flight when `startHar` ran is not. One entry per hop, in start order: a redirect ends its hop
+with `response.redirectURL` and the next hop of the same request is a new entry. Each entry has
+the request headers as Firefox sent them (`Cookie` included), the response status, status line
+and headers, `request.cookies` and `response.cookies` parsed from them, `queryString`, the
+server IP as `serverIPAddress` and timings from the webRequest events.
+
+- `request.postData`: urlencoded and multipart form bodies become `params` with `_formData:
+  true` and no `text`; a raw body is `text` when it decodes in its `Content-Type` charset,
+  otherwise base64 with `_encoding: "base64"`. `_fileParts` counts parts Firefox reports as a
+  file, `_truncatedByBrowser` and `_originalSize` say Firefox itself cut the body at its raw cap
+- `response.content`: the body as the page received it after content decoding (gzip and br
+  already undone), `text` for a textual MIME type that decodes, base64 with `encoding:
+  "base64"` otherwise; `size` is the decoded byte count seen. `_complete: false` marks a stored
+  body that did not reach its end (cut at the cap, ended by an error, still loading at stop),
+  `_bodyError` the stream filter's error
+- `timings`: `blocked` up to the headers being sent, `wait` up to the response headers,
+  `receive` up to the end; `send` is 0 and `dns`, `connect` and `ssl` are -1, since webRequest
+  has no such events. `headersSize` is -1 on both sides
+- `request.bodySize` is a valid `Content-Length`, else the captured raw length, 0 for a request
+  without a body and -1 when unknown; `response.bodySize` is 0 for HEAD, 1xx, 204 and 304, the
+  `Content-Length` of a complete untruncated body, else -1
+- `pages`: `page_1` is the document already loaded when the recording started, and each
+  top-level navigation opens the next page. `title` is the page url, `pageTimings.onContentLoad`
+  and `onLoad` are milliseconds from the page start, -1 when that event did not arrive. Every
+  `pageref` names a page of the log
+
+HAR 1.2 allows custom fields with a leading `_`; these are the ones used:
+
+| Custom field | Meaning |
+|---|---|
+| entry `_resourceType`, `_frameId` | the webRequest type (`main_frame`, `script`, `xmlhttprequest`, ...) and the frame the request came from, 0 for the top document |
+| entry `_fromCache` | Firefox answered from its cache |
+| entry `_error` | the webRequest error (`NS_ERROR_...`); any status and headers already received are kept |
+| entry `_pending` | the request had not finished when `stopHar` ran |
+| entry `_securityInfo` | TLS summary of an https or wss response: `state`, `protocolVersion`, `cipherSuite`, `keaGroupName`, `signatureSchemeName`, `isExtendedValidation`, `hsts`, `hpkp`, `errorMessage`, and the leaf `certificate` with `subject`, `issuer`, `validity {start, end}` and `fingerprint.sha256` |
+| `content._truncated`, `postData._truncated` | the body passed `maxBodySize`; only the first bytes are stored |
+| `content._bodyDropped`, `postData._bodyDropped` | the body was not stored: the recording's budget was spent, or the reply had to shrink |
+| `content._complete`, `content._bodyError` | see above |
+| `postData._encoding`, `_fileParts`, `_formData`, `_truncatedByBrowser`, `_originalSize`, `_error` | see above; `_error` is Firefox's own error reading the request body |
+| log `_recording` | `{tabId, startedDateTime, maxBodySize, truncatedBodies, droppedBodies, pendingEntries, tabClosed}` |
+
+`creator` is `firefox-ctl` with the extension version.
+
+### Redaction
+
+The HAR follows the same preference as `getNetworkRequests`: while "Redact credential response
+headers" is ticked, the default, the values of `set-cookie`, `cookie`, `authorization`,
+`proxy-authorization`, `www-authenticate` and `proxy-authenticate` become `[redacted]` in request
+and response headers alike, every duplicate included, and so does every value in
+`request.cookies` and `response.cookies`. Nothing else is touched: urls, query strings, request
+bodies and response bodies are always raw, so a recorded login form carries its password in
+`postData`. The preference is read at `stopHar`, an unreadable setting redacts, and the
+recording itself always holds the raw data, so unticking the box before `stopHar` returns it
+raw.
+
+### Limits
+
+- `maxBodySize` (10485760 bytes by default) caps each request and response body. Past it the
+  page gets the rest straight from the network and the entry carries `_truncated: true`. `0`
+  records metadata only: no stream filters and no request bodies
+- Each recording stores at most 160 MiB of body bytes, request and response together. Once
+  that budget is spent, later bodies are not stored and carry `_bodyDropped: true`
+- The reply must fit the host's 256 MiB frame cap less 64 KiB for the envelope. A HAR that does
+  not loses its largest bodies first, each marked `_bodyDropped: true` and counted in
+  `_recording.droppedBodies`; only a HAR too large without any body fails with
+  `HAR_TOO_LARGE: HAR is <n> bytes without bodies, the limit is <limit>`. Either way the
+  recording is gone after `stopHar`
+- Response bodies come through `webRequest.filterResponseData`: every chunk is passed to the
+  page unchanged before it is stored, and `stopHar` releases every filter of the recording, so
+  a request still loading finishes in the page without the recorder
+- A tab closed while recording keeps its data: `stopHar --tabId <id>` still answers, with
+  `_recording.tabClosed: true`. A recording lives in the background page's memory only and is
+  lost on a background page restart: the add-on reloaded, updated or disabled, Firefox restarted
+
+Not captured:
+
+- WebSocket frames and Server-Sent Events messages; the WebSocket handshake is an entry
+- file contents of `multipart/form-data` uploads: Firefox reports field values and file names
+  alike, so a `params` value may be a file name (the `postData.comment` says so)
+- request bodies above Firefox's own raw cap, `webextensions.webRequest.requestBodyMaxRawBytes`
+  (16 MiB by default): what Firefox kept is stored, with `_truncatedByBrowser`
+- the DNS, connect and SSL phases of `timings`
+- requests outside the tab (`tabId: -1`): service workers and background fetches
+- service-worker script bodies
 
 ## Dropped
 

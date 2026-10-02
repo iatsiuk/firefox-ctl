@@ -209,9 +209,9 @@ all bounded by `--maxWait` and by what is left of `--request-timeout`. The wait 
 as `readiness {waitMs, timedOut, timeline}` and never fails the command; `--skipReadiness`
 captures straight away.
 
-A reply has to fit the host's 10 MiB frame, so a large capture is re-encoded down a ladder -
-PNG to JPEG, then quality, then scale - and the result reports what was applied plus
-`reduced {from, to, steps}`. A capture that cannot be made to fit fails with
+A screenshot keeps its reply under a 9 MiB budget of its own, so a large capture is
+re-encoded down a ladder - PNG to JPEG, then quality, then scale - and the result reports what
+was applied plus `reduced {from, to, steps}`. A capture that cannot be made to fit fails with
 `SCREENSHOT_TOO_LARGE` rather than timing out the client.
 
 `getConsoleLogs` turns capture on when it is first called, so it never reports what happened
@@ -256,6 +256,31 @@ An import above 1 MB is refused by the host with `Message too large`; split the 
 logic is in `src/cookies.ts`, the handlers in `src/handlers/cookies.ts`, and `test/fakes.ts`
 carries an in-memory cookie jar for the tests.
 
+## HAR recording
+
+```
+cli/firefox-ctl startHar                                      # {tabId, startedDateTime, maxBodySize}
+cli/firefox-ctl navigate --url https://example.com
+cli/firefox-ctl click --selector 'a[href="/login"]'
+cli/firefox-ctl stopHar > page.har                            # {"log": {...}}, HAR 1.2
+cli/firefox-ctl startHar --maxBodySize 0                      # metadata only, no bodies
+```
+
+`startHar` records the target tab, its child frames included, until `stopHar`: request and
+response headers, request bodies, response bodies through `webRequest.filterResponseData`
+stream filters, redirects as one entry per hop, errors, timings, the server IP, the cache flag,
+a TLS summary and one page per top-level navigation. Every chunk reaches the page unchanged
+before it is stored, and `stopHar` releases every filter, so recording never changes what the
+page loads. Bodies are capped at `--maxBodySize` (10 MiB) each and 160 MiB per recording; a
+HAR too large for the 256 MiB reply loses its largest bodies first. Credential headers and
+cookie values are `[redacted]` while the redaction preference is ticked; bodies and urls are
+always raw.
+
+The webRequest listeners, blocking ones included, exist only while a tab records. The
+recorder is `src/har-recorder.ts`, the pure HAR building, redaction and reply fitting
+`src/har.ts`, the two commands `src/handlers/har.ts`; `test/fakes.ts` carries a state-machine
+`FakeStreamFilter` that throws where Firefox throws.
+
 ## Layout
 
 ```
@@ -273,7 +298,9 @@ src/session.ts      managed window, tab pool, persistence and duplicate sweep
 src/attached.ts     attached user tabs
 src/network.ts      webRequest tracker behind getNetworkRequests and readiness
 src/readiness.ts    waitForPageReady, the gate a screenshot waits on
-src/handlers/       window, tab, attachment, page (dom.ts), screenshot, devtools, frame and cookie handlers
+src/har.ts          pure HAR logic: headers, cookies, bodies, timings, redaction, fitting
+src/har-recorder.ts per-tab HAR recordings over webRequest, stream filters, webNavigation
+src/handlers/       window, tab, attachment, page (dom.ts), screenshot, devtools, frame, cookie and HAR handlers
 src/cookies.ts      pure cookie logic: filter, url, set and tombstone details, identity, sort
 src/devices.ts      setViewport device presets
 src/protocol.ts     native wire contract, mirrors cli/internal/protocol
@@ -283,7 +310,7 @@ src/content/        Page interface, action registry, the page actions and the
                     internal ones the background drives (readiness, image, consent)
 src/browser.ts      the browser.* subset used, plus realBrowser()
 src/env.ts          clock, UUIDs and timers, plus realEnvironment()
-src/commands.json   the 37 command names, kept equal to the Go fixture by a test
+src/commands.json   the 39 command names, kept equal to the Go fixture by a test
 test/               bun tests and the fakes
 ```
 

@@ -1,6 +1,6 @@
 # Roadmap
 
-Five ralphex plans, executed in order, and a sixth and a seventh added afterwards. Each plan was complete, tested and linted before the next started. Plans 1 and 2 had no dependency on each other apart from `protocol` types; plans 3-5 built on 2, plan 6 on 4, plan 7 on 1 and 3. All seven are delivered, plus two interim plans written during execution: command deadlines and the AMO public listing. The plan files themselves are working notes and are not tracked in git.
+Five ralphex plans, executed in order, and a sixth, a seventh and an eighth added afterwards. Each plan was complete, tested and linted before the next started. Plans 1 and 2 had no dependency on each other apart from `protocol` types; plans 3-5 built on 2, plan 6 on 4, plan 7 on 1 and 3, plan 8 on 1 and 5. All eight are delivered, plus two interim plans written during execution: command deadlines and the AMO public listing. The plan files themselves are working notes and are not tracked in git.
 
 The interim plan came out of the plan 4 end-to-end run: a content-script reply lost to a navigation hung `executeInTab`, and because every command ran behind the previous one the whole extension stopped answering. It gave each command a deadline from `--request-timeout`, let `ping` and `version` bypass the session, moved the URL wait into the background page where it survives the navigation it waits for, and narrowed serialisation to the five commands that mutate session state. No new commands.
 
@@ -84,6 +84,16 @@ Added after the six plans, when a login had to move between the managed window a
 
 Verification: Go tests for the host reply and the `--json` sources; bun tests for the pure cookie logic, the fake cookie jar, the four handlers and an export -> delete -> import round trip through the port; manual smoke in Firefox.
 
+## Plan 8: HAR recording (delivered)
+
+Added when `getNetworkRequests`, a 200-entry ring of metadata, was not enough to see what a page actually sent and received: no request headers, no bodies, nothing a HAR viewer or a replay tool can load.
+
+1. The host accepts extension frames up to 256 MiB instead of 10 MiB, survives an oversize frame once its declared length is discarded, and writes replies unescaped in 64 KiB chunks under per-chunk deadlines, so one large reply reaches the client intact
+2. `startHar` and `stopHar`: a full-capture HAR 1.2 recorder for one tab and its child frames over `webRequest`, `webRequestBlocking` stream filters for response bodies, `getSecurityInfo` for the TLS summary and `webNavigation` for pages; per-body cap, a 160 MiB budget per recording, reply fitting that drops the largest bodies first, redaction following the existing preference
+3. The screenshot keeps its own 9 MiB budget; its error text names that budget instead of the old host cap
+
+Verification: Go tests for the discarded frame, the unescaped and chunked replies and a 64 MiB end-to-end reply; bun tests for the pure HAR logic, the recorder over strict webRequest and stream-filter fakes, both handlers and a recording through the port; manual smoke in Firefox.
+
 ## After the plans
 
-The command set of `docs/commands.md` is complete: all 37 commands are registered and reachable end to end. What was dropped on purpose - MCP, the popup, multi-agent coordination, focus loops, the watermark, and every security gate except the `evaluate` opt-in - is listed under Dropped there and is not planned. The AMO listing plan added the preferences page, the data-collection declaration, the private-state rule, the Linux install path and the release pipeline.
+The command set of `docs/commands.md` is complete: all 39 commands are registered and reachable end to end. What was dropped on purpose - MCP, the popup, multi-agent coordination, focus loops, the watermark, and every security gate except the `evaluate` opt-in - is listed under Dropped there and is not planned. The AMO listing plan added the preferences page, the data-collection declaration, the private-state rule, the Linux install path and the release pipeline.

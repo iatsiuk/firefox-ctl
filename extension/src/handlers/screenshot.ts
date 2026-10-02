@@ -26,9 +26,9 @@ const MIN_SCALE = 0.01
 const MAX_ANNOTATED = 30
 
 /**
- * The host drops any frame above 10 MiB, so a reply is measured against this
- * before it is sent; the difference leaves room for whatever the envelope and
- * the JSON escaping add.
+ * The screenshot's own reply budget, far below the host's 256 MiB frame cap: a
+ * reply is measured against this before it is sent, the measure covering the
+ * envelope and the JSON escaping.
  */
 export const FRAME_LIMIT_BYTES = 9 * 1024 * 1024
 
@@ -231,7 +231,7 @@ async function fit(deps: HandlerDeps, capture: Capture): Promise<JsonObject> {
   if (bytes > FRAME_LIMIT_BYTES) {
     throw new ExtensionError(
       "SCREENSHOT_TOO_LARGE",
-      `${bytes} exceeds the 10 MiB frame limit; lower --scale or --quality.`,
+      `${bytes} exceeds the 9 MiB screenshot budget; lower --scale or --quality.`,
     )
   }
   return result

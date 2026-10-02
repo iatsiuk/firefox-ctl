@@ -68,6 +68,7 @@ Use `firefox-ctl --help` or `firefox-ctl <command> --help` for flags. `--json '{
 - Page analysis: `getPageState`, `getAccessibilitySnapshot`, `getElementInfo`, `evaluate` (opt-in, see Limitations)
 - Capture and diagnostics: `screenshot`, `handleConsent`, `getConsoleLogs`, `getNetworkRequests`
 - Cookies: `exportCookies`, `setCookie`, `deleteCookies`, `importCookies` (the store of the target tab by default, `--storeId` to pick one)
+- HAR recording: `startHar`, `stopHar` (one tab with its child frames, headers and bodies included; `firefox-ctl stopHar > page.har` writes a HAR 1.2 file)
 
 The complete parameters, result shapes, and error texts are in [docs/commands.md](docs/commands.md).
 
@@ -82,7 +83,7 @@ cli/firefox-ctl screenshot --purpose read-text \
   | base64 -D > screenshot.jpg
 ```
 
-Large replies are kept below the host's 10 MiB extension-to-host frame cap. firefox-ctl re-encodes them at a lower quality or scale and returns `reduced`; if they still do not fit, it returns `SCREENSHOT_TOO_LARGE`.
+A screenshot reply keeps a 9 MiB budget of its own. firefox-ctl re-encodes a larger capture at a lower quality or scale and returns `reduced`; if it still does not fit, it returns `SCREENSHOT_TOO_LARGE`.
 
 ## Limitations
 
@@ -94,6 +95,7 @@ Large replies are kept below the host's 10 MiB extension-to-host frame cap. fire
 - `getConsoleLogs` captures the content-script world, uncaught errors, and unhandled rejections. It does not capture the site's own `console.log` calls. Its result reports `scope: "content-world"`.
 - Firefox accepts at most 1 MB per command from the host. A larger one, typically a big `importCookies` file, is refused with `Message too large: ...` and the host keeps serving; split the file and import it in parts.
 - Cookie commands on the private managed window read and write `firefox-private`, which needs "Run in Private Windows"; without it Firefox's own error comes back as is. A cookie export holds live session cookies, so keep the file private.
+- A HAR recording redacts only credential headers and cookie values (while the redaction preference is ticked); urls and request and response bodies, posted passwords included, are raw. Bodies are capped at 10 MiB each (`startHar --maxBodySize`) and 160 MiB per recording, and the recording lives in memory until `stopHar`. WebSocket frames, upload file contents and DNS/connect/SSL timings are not captured. See [docs/commands.md](docs/commands.md).
 - A command whose page reply never arrives returns `COMMAND_TIMEOUT` at `--request-timeout`. Timed-out work is not cancelled; late results are dropped. `click`, `type`, `pressKey`, and `evaluate` are not retried automatically.
 
 ## Session model

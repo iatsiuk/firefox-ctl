@@ -46,7 +46,7 @@
   "timeoutText": "Timeout waiting for text: \"<text>\"",
   "timeoutUrl": "Timeout waiting for URL matching: \"<url>\"",
   "timeoutElement": "Timeout waiting for element: <selector>",
-  "screenshotTooLarge": "SCREENSHOT_TOO_LARGE: <bytes> exceeds the 10 MiB frame limit; lower --scale or --quality.",
+  "screenshotTooLarge": "SCREENSHOT_TOO_LARGE: <bytes> exceeds the 9 MiB screenshot budget; lower --scale or --quality.",
   "commandTimeout": "COMMAND_TIMEOUT: <command> did not finish within <ms> ms.",
   "tabLoading": "CONTENT_SCRIPT_UNAVAILABLE: Tab <id> is still loading <url>. Wait for it to finish (waitFor --selector or --url) and retry."
 }

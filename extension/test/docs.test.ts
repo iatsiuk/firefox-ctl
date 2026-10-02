@@ -143,9 +143,14 @@ describe("screenshot and DevTools documentation", () => {
     "commands.md documents the frame limit and the downgrade ladder",
     async () => {
       const text = await readRootDoc(join("docs", "commands.md"))
-      for (const phrase of ["10 MiB", "SCREENSHOT_TOO_LARGE", "reduced {from, to, steps}"]) {
+      for (const phrase of [
+        "9 MiB budget of its own",
+        "SCREENSHOT_TOO_LARGE",
+        "reduced {from, to, steps}",
+      ]) {
         expect(text).toContain(phrase)
       }
+      expect(text).not.toContain("drops any extension frame over 10 MiB")
     },
   )
 
@@ -637,7 +642,6 @@ describe("child frame documentation", () => {
   test.skipIf(root === undefined)("roadmap.md records the child-frame plan", async () => {
     const text = await readRootDoc(join("docs", "roadmap.md"))
     expect(text).toContain("## Plan 6: Child frames (delivered)")
-    expect(text).toContain("all 37 commands")
     expect(text).not.toContain("all 33 commands")
   })
 
@@ -729,5 +733,93 @@ describe("cookie documentation", () => {
     }
     expect(text).toContain("src/cookies.ts")
     expect(text).not.toContain("the 30 command names")
+  })
+})
+
+describe("HAR documentation", () => {
+  test.skipIf(root === undefined)(
+    "commands.md documents the workflow, the capture, the limits and what is not captured",
+    async () => {
+      const text = await readRootDoc(join("docs", "commands.md"))
+      for (const phrase of [
+        "## HAR",
+        "firefox-ctl stopHar > page.har",
+        "`_recording`",
+        "`_truncated: true`",
+        "`_bodyDropped: true`",
+        "`_pending`",
+        "160 MiB",
+        "WebSocket",
+        "16 MiB",
+        "`tabId: -1`",
+        "background page restart",
+        "HAR_TOO_LARGE",
+        "see HAR",
+      ]) {
+        expect(text).toContain(phrase)
+      }
+    },
+  )
+
+  test.skipIf(root === undefined)(
+    "architecture.md describes the frame cap, the recorder, its data and its modules",
+    async () => {
+      const text = await readRootDoc(join("docs", "architecture.md"))
+      for (const phrase of [
+        "## HAR recorder",
+        "256 MiB",
+        "`webRequestBlocking`",
+        "`startHar`, `stopHar`",
+        "src/har.ts",
+        "src/har-recorder.ts",
+        "src/handlers/har.ts",
+      ]) {
+        expect(text).toContain(phrase)
+      }
+      expect(text).not.toContain("Project cap: 10 MB")
+      expect(text).not.toContain("drops any frame above 10 MiB")
+    },
+  )
+
+  test.skipIf(root === undefined)(
+    "reviewer notes justify webRequestBlocking and declare the HAR data",
+    async () => {
+      const text = await readRootDoc(join("docs", "reviewer-notes.md"))
+      for (const phrase of ["| `webRequestBlocking` |", "filterResponseData", "| `startHar`"]) {
+        expect(text).toContain(phrase)
+      }
+      expect(text).not.toContain("there is no `webRequestBlocking`")
+    },
+  )
+
+  test("the preferences page names stopHar under header redaction", async () => {
+    const text = await Bun.file(join(import.meta.dir, "..", "options.html")).text()
+    expect(text).toContain("<code>stopHar</code>")
+  })
+
+  test.skipIf(root === undefined)("roadmap.md records the HAR plan", async () => {
+    const text = await readRootDoc(join("docs", "roadmap.md"))
+    expect(text).toContain("## Plan 8: HAR recording (delivered)")
+    expect(text).toContain("all 39 commands")
+    expect(text).not.toContain("all 37 commands")
+  })
+
+  test.skipIf(root === undefined)(
+    "the root README lists the HAR commands and drops the old host cap",
+    async () => {
+      const readme = await readRootDoc("README.md")
+      expect(readme).toContain("`startHar`, `stopHar`")
+      expect(readme).not.toContain("10 MiB extension-to-host frame cap")
+    },
+  )
+
+  test("extension README walks through a HAR recording", async () => {
+    const text = await Bun.file(join(import.meta.dir, "..", "README.md")).text()
+    for (const step of ["firefox-ctl startHar", "firefox-ctl stopHar > page.har"]) {
+      expect(text).toContain(step)
+    }
+    expect(text).toContain("src/har-recorder.ts")
+    expect(text).toContain("the 39 command names")
+    expect(text).not.toContain("the host's 10 MiB frame")
   })
 })
